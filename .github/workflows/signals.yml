@@ -1,0 +1,26 @@
+name: XAUUSD Gold Signals Telegram Broadcaster
+
+on:
+  schedule:
+    # Runs every 15 minutes during London (07:00 - 10:45 UTC) and NY (12:00 - 17:45 UTC) Mon-Fri
+    - cron: '*/15 7-10,12-17 * * 1-5'
+  workflow_dispatch: # Allows manual 1-click trigger from GitHub web or mobile app
+
+jobs:
+  check-signals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Gold Signal Engine
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 telegram_gold_signal.py
