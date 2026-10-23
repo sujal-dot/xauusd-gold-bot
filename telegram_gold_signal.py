@@ -150,6 +150,20 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
             "───────────────"
         ])
         
+    toolkit = ex.get("live_account_toolkit")
+    if toolkit:
+        pos = toolkit.get("position_sizing_table", {})
+        lines.extend([
+            "",
+            "💼 *LIVE ACCOUNT LOT SIZES (1% STRICT RISK)*",
+            f"• `$500` Balance ──► `{pos.get('$500', {}).get('recommended_lots', '0.01')} Lots`",
+            f"• `$1,000` Balance ──► `{pos.get('$1,000', {}).get('recommended_lots', '0.02')} Lots`",
+            f"• `$5,000` Balance ──► `{pos.get('$5,000', {}).get('recommended_lots', '0.11')} Lots`",
+            f"• `$10,000` Balance ──► `{pos.get('$10,000', {}).get('recommended_lots', '0.22')} Lots`",
+            f"🛡️ _{toolkit.get('broker_spread_guard')}_",
+            "───────────────"
+        ])
+        
     lines.extend([
         "",
         "📊 *KEY CONFLUENCE*"

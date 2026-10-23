@@ -239,6 +239,25 @@ def calculate_session_levels(candles_5m):
         "sweep_note": sweep_note
     }
 
+def calculate_live_position_sizes(risk_per_ounce: float, risk_pct: float = 1.0):
+    """
+    Calculates exact live-account lot sizes across standard account balances
+    to enforce strict institutional 1% risk management on live broker accounts.
+    Formula: Lots = (Equity * Risk%) / (SL Distance in $/oz * 100)
+    """
+    accounts = [500, 1000, 2500, 5000, 10000, 50000, 100000]
+    table = {}
+    for balance in accounts:
+        risk_dollars = balance * (risk_pct / 100.0)
+        raw_lots = risk_dollars / (max(risk_per_ounce, 0.5) * 100.0)
+        lots = max(round(raw_lots, 2), 0.01)
+        table[f"${balance:,}"] = {
+            "risk_cash": f"${risk_dollars:.2f} ({risk_pct}%)",
+            "recommended_lots": lots,
+            "max_loss_dollars": f"${round(lots * risk_per_ounce * 100, 2):.2f}"
+        }
+    return table
+
 def analyze_gold_scalp():
     """
     Dedicated high-frequency scalping engine for Gold (XAU/USD).
@@ -351,6 +370,7 @@ def analyze_gold_scalp():
     
     # Scalp ATR-based Stop & Target buffers
     sl_buffer = max(min(round(atr_5m * 1.35, 2), 4.50), 2.50)
+    spread_buffer = 0.35  # $0.35 broker spread guard on Gold
     
     if bear_score >= bull_score + 1:
         bias = "BEARISH"
@@ -361,7 +381,7 @@ def analyze_gold_scalp():
         ideal_entry = round(current_price, 2)
         entry_low = round(current_price, 2)
         entry_high = round(current_price + 1.20, 2)
-        stop_loss = round(current_price + sl_buffer, 2)
+        stop_loss = round(current_price + sl_buffer + spread_buffer, 2)
         risk = round(abs(stop_loss - ideal_entry), 2)
         
         tp1 = round(ideal_entry - (risk * 1.5), 2)
@@ -376,7 +396,7 @@ def analyze_gold_scalp():
         ideal_entry = round(current_price, 2)
         entry_low = round(current_price - 1.20, 2)
         entry_high = round(current_price, 2)
-        stop_loss = round(current_price - sl_buffer, 2)
+        stop_loss = round(current_price - sl_buffer - spread_buffer, 2)
         risk = round(abs(ideal_entry - stop_loss), 2)
         
         tp1 = round(ideal_entry + (risk * 1.5), 2)
@@ -419,6 +439,17 @@ def analyze_gold_scalp():
                 "step_2": f"When TP1 (${tp1:.2f}) is hit, close 50% partial profit (+${risk*1.5:.2f}/oz profit locked).",
                 "step_3": f"IMMEDIATELY drag Stop Loss to exact entry CMP (${current_price:.2f}).",
                 "guarantee": "0% DOWNSIDE RISK. Downside is mathematically eliminated. Trade becomes a free roll (Win or $0.00 Breakeven)."
+            },
+            "live_account_toolkit": {
+                "broker_spread_guard": f"+${spread_buffer:.2f}/oz broker spread guard included in Stop Loss",
+                "position_sizing_table": calculate_live_position_sizes(risk, risk_pct=1.0),
+                "pre_flight_live_checklist": [
+                    "1. SPREAD: Check broker spread is < $0.35 (optimal in NY session).",
+                    "2. LOT SIZE: Select recommended lots based on your live account balance.",
+                    "3. CMP EXECUTION: Fire Market Order at CMP - no pending limit order delay.",
+                    "4. FREE-ROLL RULE: Set alarm at TP1. When filled, slide SL to CMP entry for a 0% risk trade.",
+                    "5. RED FOLDER RULE: Verify no High-Impact US news event (CPI/FOMC/NFP) is within 20 mins."
+                ]
             },
             "pullback_retest_zone": f"${min(ema9_5m, ema21_5m):.2f} – ${max(ema9_5m, ema21_5m):.2f}",
             "trade_management": "Enter at CMP immediately. Close 50% profit at TP1 and slide Stop Loss to CMP Breakeven for a 0% downside free roll."
@@ -685,6 +716,20 @@ def print_terminal_report(res):
         print(f"  • Market Context: {sl.get('sweep_note')}")
         
     print(f"\n  • Rules        : {ex['trade_management']}")
+    
+    toolkit = ex.get('live_account_toolkit')
+    if toolkit:
+        print("\n[💼 LIVE ACCOUNT POSITION SIZING (1% STRICT RISK RULE)]")
+        print(f"  • Broker Guard: {toolkit.get('broker_spread_guard')}")
+        pos_table = toolkit.get('position_sizing_table', {})
+        print(f"  {'ACCOUNT EQUITY':<16} | {'RISK AMOUNT':<16} | {'RECOMMENDED LOTS':<18} | {'MAX DOLLAR RISK'}")
+        print("  " + "-" * 65)
+        for balance, details in pos_table.items():
+            print(f"  {balance:<16} | {details['risk_cash']:<16} | {details['recommended_lots']:<18} | {details['max_loss_dollars']}")
+            
+        print("\n[🛫 PRE-FLIGHT LIVE ACCOUNT EXECUTION CHECKLIST]")
+        for check in toolkit.get('pre_flight_live_checklist', []):
+            print(f"  [✓] {check}")
     
     print("\n[📊 KEY TECHNICALS & MACRO CONFLUENCE]")
     ind = res['indicators']
