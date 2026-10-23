@@ -1,10 +1,25 @@
-name: XAUUSD Gold Signals Telegram Broadcaster
+name: XAUUSD Forex Gold Scalper & Signal Broadcaster
 
 on:
   schedule:
-    # Runs every 15 minutes during London (07:00 - 10:45 UTC) and NY (12:00 - 17:45 UTC) Mon-Fri
-    - cron: '*/15 7-10,12-17 * * 1-5'
-  workflow_dispatch: # Allows manual 1-click trigger from GitHub web or mobile app
+    # Runs every 15 minutes across Asian (01:00-04:45 UTC), London (07:00-11:45 UTC), and NY (12:00-19:45 UTC) Mon-Fri
+    - cron: '*/15 1-4,7-11,12-19 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      timeframe:
+        description: 'Trading Style / Timeframe'
+        required: true
+        default: 'scalp'
+        type: choice
+        options:
+          - scalp
+          - intraday
+          - swing
+      force:
+        description: 'Force send alert (bypasses session check and price cooldown)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   check-signals:
@@ -18,9 +33,15 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Run Gold Signal Engine
+      - name: Run Gold Scalp Signal Engine
+        run: |
+          python3 gold_signal.py --timeframe "${{ github.event.inputs.timeframe || 'scalp' }}"
+
+      - name: Broadcast to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TIMEFRAME: ${{ github.event.inputs.timeframe || 'scalp' }}
+          FORCE_ARG: ${{ github.event.inputs.force == 'true' && '--force' || '' }}
         run: |
-          python3 telegram_gold_signal.py
+          python3 telegram_gold_signal.py --timeframe "$TIMEFRAME" $FORCE_ARG

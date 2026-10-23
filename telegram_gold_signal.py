@@ -84,9 +84,10 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str) -> bool:
 
 def is_active_session():
     """
-    Returns True if current UTC time is within high-probability London or NY sessions.
-    - London Session: 07:00 - 10:30 UTC (12:30 PM - 4:00 PM IST)
-    - NY / Overlap: 12:00 - 17:00 UTC (5:30 PM - 10:30 PM IST)
+    Returns True if current UTC time is within active market sessions.
+    - Asian Session: 01:00 - 05:00 UTC (06:30 AM - 10:30 AM IST)
+    - London Session: 07:00 - 11:30 UTC (12:30 PM - 05:00 PM IST)
+    - NY / Overlap: 12:00 - 19:00 UTC (05:30 PM - 12:30 AM IST)
     """
     now_utc = datetime.now(timezone.utc)
     hour = now_utc.hour + now_utc.minute / 60.0
@@ -95,15 +96,18 @@ def is_active_session():
     if now_utc.weekday() in (5, 6): # Saturday, Sunday
         return False, "Market Closed (Weekend)"
         
-    in_london = 7.0 <= hour <= 10.5
-    in_ny = 12.0 <= hour <= 17.0
+    in_asian = 1.0 <= hour <= 5.0
+    in_london = 7.0 <= hour <= 11.5
+    in_ny = 12.0 <= hour <= 19.0
     
-    if in_london:
+    if in_asian:
+        return True, "Asian / Tokyo Session"
+    elif in_london:
         return True, "London Open Session"
     elif in_ny:
         return True, "New York / London Overlap Session"
     else:
-        return False, "Outside Prime Sessions (Asian / Off-hours)"
+        return False, "Off-hours (Low Liquidity)"
 
 def format_telegram_alert(res: dict, session_name: str) -> str:
     """Formats the signal analysis into a professional, mobile-friendly Telegram alert."""
@@ -112,11 +116,13 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
     
     ex = res["execution"]
     ind = res["indicators"]
-    p = res["pivots_daily"]
+    p = res.get("pivots_daily", {})
+    tf = res.get("timeframe", "Scalp (5M / 15M)")
     
     lines = [
         f"{icon} *{sig} ALERT: XAU/USD (Gold)*",
-        f"⏱ *Session*: {session_name} | `{res['timestamp']}`",
+        f"⏱ *Mode*: `{tf}` | *Session*: {session_name}",
+        f"🕒 *Time*: `{res['timestamp']}`",
         f"💵 *Current Price*: `${res['current_price']:.2f}`",
         f"🎯 *Confidence*: `{res['confidence_percent']}%` | *Bias*: `{res['bias']}`",
         "",
@@ -131,17 +137,34 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
         f"• *Rule*: _{ex['trade_management']}_",
         "───────────────",
         "",
-        "📊 *KEY CONFLUENCE*",
-        f"• 1H RSI: `{ind['rsi_14_1h']}` | Daily RSI: `{ind['rsi_14_daily']}`",
-        f"• 1H 200 EMA: `${ind['ema_200_1h']}` | 1H 50 EMA: `${ind['ema_50_1h']}`",
-        f"• Daily Pivot (PP): `${p.get('PP')}` | S1: `${p.get('S1')}` | R1: `${p.get('R1')}`",
-        f"• US Dollar Index (DXY): `{ind['dxy_trend']}` ({ind['dxy_price']})",
+        "📊 *KEY CONFLUENCE*"
+    ]
+    
+    if "atr_14_5m" in ind:
+        lines.extend([
+            f"• 5M RSI: `{ind.get('rsi_14_5m')}` | 15M RSI: `{ind.get('rsi_14_15m')}` | 5M ATR: `${ind.get('atr_14_5m')}`",
+            f"• 5M EMAs: 9: `${ind.get('ema_9_5m')}` | 21: `${ind.get('ema_21_5m')}` | 50: `${ind.get('ema_50_5m')}`",
+            f"• 15M Trend: 20 EMA `${ind.get('ema_20_15m')}` | 50 EMA `${ind.get('ema_50_15m')}`",
+            f"• US Dollar Index (DXY): `{ind.get('dxy_trend')}` ({ind.get('dxy_price')})"
+        ])
+        if res.get("fvgs_detected"):
+            fvg = res["fvgs_detected"][0]
+            lines.append(f"• 5M FVG: `{fvg['type']}` `${fvg['bottom']} – ${fvg['top']}`")
+    else:
+        lines.extend([
+            f"• 1H RSI: `{ind.get('rsi_14_1h')}` | Daily RSI: `{ind.get('rsi_14_daily')}`",
+            f"• 1H 200 EMA: `${ind.get('ema_200_1h')}` | 1H 50 EMA: `${ind.get('ema_50_1h')}`",
+            f"• Daily Pivot (PP): `${p.get('PP')}` | S1: `${p.get('S1')}` | R1: `${p.get('R1')}`",
+            f"• US Dollar Index (DXY): `{ind.get('dxy_trend')}` ({ind.get('dxy_price')})"
+        ])
+        
+    lines.extend([
         "",
         "⚠️ _Gold carries high volatility. Size strictly at 1-2% account equity risk._"
-    ]
+    ])
     return "\n".join(lines)
 
-def run_check(force: bool = False, timeframe: str = "swing") -> bool:
+def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
     """Executes a single check and sends alert if criteria are met."""
     config = load_config()
     bot_token = config.get("bot_token")
@@ -156,7 +179,7 @@ def run_check(force: bool = False, timeframe: str = "swing") -> bool:
         print(f"[-] Current time is outside prime sessions: {session_name}. Skipping check.")
         return False
         
-    print(f"[*] Analyzing Gold market during {session_name}...")
+    print(f"[*] Analyzing Gold market in {timeframe.upper()} mode during {session_name}...")
     res = analyze_gold(timeframe_mode=timeframe)
     confidence = res.get("confidence_percent", 0)
     signal = res.get("signal", "NEUTRAL")
@@ -181,9 +204,10 @@ def run_check(force: bool = False, timeframe: str = "swing") -> bool:
     last_price = last_state.get("price", 0)
     curr_price = res["current_price"]
     
-    # If same signal and price has moved less than $10, don't spam
-    if not force and last_sig == signal and abs(curr_price - last_price) < 10.0:
-        print("[-] Signal unchanged and price within $10 of last alert. Skipping to avoid spam.")
+    # In scalping, a $3.50+ move is a complete trade setup; in swing, $10.0+
+    min_price_move = 3.5 if timeframe == "scalp" else 10.0
+    if not force and last_sig == signal and abs(curr_price - last_price) < min_price_move:
+        print(f"[-] Signal unchanged and price within ${min_price_move} of last alert. Skipping to avoid spam.")
         return False
         
     # Send alert
@@ -207,7 +231,7 @@ def main():
     parser.add_argument("--chat-id", type=str, help="Telegram Chat ID")
     parser.add_argument("--test", action="store_true", help="Send a test message to Telegram")
     parser.add_argument("--force", action="store_true", help="Run analysis regardless of session hours")
-    parser.add_argument("--timeframe", choices=["scalp", "intraday", "swing"], default="swing", help="Signal timeframe mode")
+    parser.add_argument("--timeframe", choices=["scalp", "intraday", "swing"], default="scalp", help="Signal timeframe mode (default: scalp)")
     parser.add_argument("--daemon", action="store_true", help="Run continuous loop (checks every 15 minutes during prime sessions)")
     args = parser.parse_args()
     

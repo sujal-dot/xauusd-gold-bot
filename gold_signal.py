@@ -186,11 +186,213 @@ def calculate_pivot_points(candles_daily):
         }
     }
 
-def analyze_gold(timeframe_mode="intraday"):
+def analyze_gold_scalp():
+    """
+    Dedicated high-frequency scalping engine for Gold (XAU/USD).
+    Focuses on 5M execution, 15M structure, 5M EMAs (9, 21, 50), tight ATR stops ($2.50-$4.50),
+    Fair Value Gaps (FVG), micro liquidity sweeps, and fast DXY 15M correlation.
+    """
+    gold_5m = fetch_candles("GC=F", interval="5m", range_val="2d")
+    gold_15m = fetch_candles("GC=F", interval="15m", range_val="5d")
+    gold_daily = fetch_candles("GC=F", interval="1d", range_val="6mo")
+    dxy_15m = fetch_candles("DX-Y.NYB", interval="15m", range_val="5d")
+    
+    if not gold_5m or not gold_15m:
+        return {"error": "Unable to fetch 5M/15M Gold market data from provider. Verify internet connection."}
+        
+    current_price = gold_5m[-1]["close"]
+    prices_5m = [c["close"] for c in gold_5m]
+    prices_15m = [c["close"] for c in gold_15m]
+    
+    # 5M Indicators (Execution)
+    ema9_5m = calculate_ema(prices_5m, 9)[-1]
+    ema21_5m = calculate_ema(prices_5m, 21)[-1]
+    ema50_5m = calculate_ema(prices_5m, 50)[-1]
+    rsi_5m = calculate_rsi(prices_5m, 14)
+    atr_5m = calculate_atr(gold_5m, 14)
+    macd_line_5m, macd_sig_5m, macd_hist_5m = calculate_macd(prices_5m)
+    swing_high_5m, swing_low_5m, fvgs_5m = find_swings_and_fvg(gold_5m)
+    
+    # 15M Indicators (Trend Context)
+    ema20_15m = calculate_ema(prices_15m, 20)[-1]
+    ema50_15m = calculate_ema(prices_15m, 50)[-1]
+    rsi_15m = calculate_rsi(prices_15m, 14)
+    
+    # Pivots
+    pivots = calculate_pivot_points(gold_daily) if gold_daily else {}
+    
+    # DXY 15M Intermarket Correlation
+    dxy_trend = "NEUTRAL"
+    dxy_price = None
+    if dxy_15m and len(dxy_15m) >= 20:
+        dxy_prices = [c["close"] for c in dxy_15m]
+        dxy_price = dxy_prices[-1]
+        dxy_ema20 = calculate_ema(dxy_prices, 20)[-1]
+        if dxy_price > dxy_ema20 and dxy_prices[-1] > dxy_prices[-5]:
+            dxy_trend = "BULLISH (Headwind for Gold)"
+        elif dxy_price < dxy_ema20 and dxy_prices[-1] < dxy_prices[-5]:
+            dxy_trend = "BEARISH (Tailwind for Gold)"
+            
+    bullish_factors = []
+    bearish_factors = []
+    
+    # Trend & EMA Alignment
+    if current_price > ema9_5m > ema21_5m:
+        bullish_factors.append(f"5M Bullish EMA stack (Price > 9 EMA {ema9_5m:.2f} > 21 EMA {ema21_5m:.2f})")
+    elif current_price < ema9_5m < ema21_5m:
+        bearish_factors.append(f"5M Bearish EMA stack (Price < 9 EMA {ema9_5m:.2f} < 21 EMA {ema21_5m:.2f})")
+        
+    if current_price > ema50_5m:
+        bullish_factors.append(f"5M Price above 50 EMA baseline resistance ({ema50_5m:.2f})")
+    else:
+        bearish_factors.append(f"5M Price capped below 50 EMA baseline resistance ({ema50_5m:.2f})")
+        
+    if current_price > ema20_15m:
+        bullish_factors.append(f"15M Trend alignment bullish (Price above 20 EMA {ema20_15m:.2f})")
+    else:
+        bearish_factors.append(f"15M Trend alignment bearish (Price below 20 EMA {ema20_15m:.2f})")
+        
+    # RSI Momentum
+    if 50 <= rsi_5m <= 65:
+        bullish_factors.append(f"5M RSI bullish expansion ({rsi_5m:.1f})")
+    elif rsi_5m > 70:
+        bearish_factors.append(f"5M RSI Overbought ({rsi_5m:.1f}) - scalp pullback expected")
+    elif 35 <= rsi_5m < 50:
+        bearish_factors.append(f"5M RSI bearish continuation momentum ({rsi_5m:.1f})")
+    elif rsi_5m < 30:
+        bullish_factors.append(f"5M RSI Oversold ({rsi_5m:.1f}) - short exhaustion / mean reversion bounce")
+        
+    # MACD Momentum
+    if macd_hist_5m > 0:
+        bullish_factors.append("5M MACD Histogram positive with buyer momentum")
+    else:
+        bearish_factors.append("5M MACD Histogram negative with seller momentum")
+        
+    # DXY Confluence
+    if "Tailwind" in dxy_trend:
+        bullish_factors.append(f"DXY 15M falling ({dxy_price:.2f}) - inverse tailwind for Gold scalp")
+    elif "Headwind" in dxy_trend:
+        bearish_factors.append(f"DXY 15M strengthening ({dxy_price:.2f}) - headwind pressure for Gold scalp")
+        
+    # Pivots
+    pp = pivots.get("classic", {}).get("PP", current_price)
+    if current_price > pp:
+        bullish_factors.append(f"Trading above Daily Pivot ({pp:.2f})")
+    else:
+        bearish_factors.append(f"Trading below Daily Pivot ({pp:.2f})")
+        
+    bull_score = len(bullish_factors)
+    bear_score = len(bearish_factors)
+    total = max(bull_score + bear_score, 1)
+    
+    # Scalp ATR-based Stop & Target buffers
+    sl_buffer = max(min(round(atr_5m * 1.35, 2), 4.50), 2.50)
+    
+    if bear_score >= bull_score + 1:
+        bias = "BEARISH"
+        confidence = min(round((bear_score / total) * 100), 90)
+        
+        # In scalping, if RSI < 32 and 9 EMA is above price, sell the pullback retest
+        if rsi_5m < 32 and ema9_5m > current_price:
+            signal_type = "SCALP SELL (WAIT PULLBACK TO 9/21 EMA)"
+            entry_low = round(min(ema9_5m, ema21_5m), 2)
+            entry_high = round(max(ema9_5m, ema21_5m), 2)
+            ideal_entry = round((entry_low + entry_high) / 2, 2)
+            stop_loss = round(entry_high + sl_buffer, 2)
+        else:
+            signal_type = "SCALP SELL"
+            entry_low = round(current_price, 2)
+            entry_high = round(max(current_price + (atr_5m * 0.4), ema9_5m), 2)
+            ideal_entry = round(current_price, 2)
+            stop_loss = round(entry_high + sl_buffer, 2)
+            
+        risk = round(abs(stop_loss - ideal_entry), 2)
+        tp1 = round(ideal_entry - (risk * 1.5), 2)
+        tp2 = round(ideal_entry - (risk * 2.5), 2)
+        tp3 = round(ideal_entry - (risk * 3.5), 2)
+        
+    elif bull_score >= bear_score + 1:
+        bias = "BULLISH"
+        confidence = min(round((bull_score / total) * 100), 90)
+        
+        if rsi_5m > 68 and ema9_5m < current_price:
+            signal_type = "SCALP BUY (WAIT PULLBACK TO 9/21 EMA)"
+            entry_low = round(min(ema9_5m, ema21_5m), 2)
+            entry_high = round(max(ema9_5m, ema21_5m), 2)
+            ideal_entry = round((entry_low + entry_high) / 2, 2)
+            stop_loss = round(entry_low - sl_buffer, 2)
+        else:
+            signal_type = "SCALP BUY"
+            entry_low = round(min(current_price - (atr_5m * 0.4), ema9_5m), 2)
+            entry_high = round(current_price, 2)
+            ideal_entry = round(current_price, 2)
+            stop_loss = round(entry_low - sl_buffer, 2)
+            
+        risk = round(abs(ideal_entry - stop_loss), 2)
+        tp1 = round(ideal_entry + (risk * 1.5), 2)
+        tp2 = round(ideal_entry + (risk * 2.5), 2)
+        tp3 = round(ideal_entry + (risk * 3.5), 2)
+        
+    else:
+        signal_type = "SCALP RANGE (FADE EXTREMES)"
+        bias = "CONSOLIDATION"
+        confidence = 55
+        ideal_entry = round(current_price, 2)
+        entry_low = round(current_price - 1.50, 2)
+        entry_high = round(current_price + 1.50, 2)
+        stop_loss = round(entry_low - 2.50, 2)
+        risk = 2.50
+        tp1 = round(current_price + 3.75, 2)
+        tp2 = round(current_price + 6.25, 2)
+        tp3 = round(current_price + 8.75, 2)
+        
+    return {
+        "asset": "XAU/USD (Gold) - Scalp Engine",
+        "timeframe": "5M Execution / 15M Trend",
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "current_price": round(current_price, 2),
+        "signal": signal_type,
+        "bias": bias,
+        "confidence_percent": confidence,
+        "execution": {
+            "entry_range": f"${min(entry_low, entry_high):.2f} – ${max(entry_low, entry_high):.2f}",
+            "ideal_entry": f"${ideal_entry:.2f}",
+            "stop_loss": f"${stop_loss:.2f}",
+            "risk_per_ounce": f"${risk:.2f}",
+            "take_profit_1": f"${tp1:.2f} (1:1.5 R:R - Quick Scalp Target)",
+            "take_profit_2": f"${tp2:.2f} (1:2.5 R:R - Key Liquidity Sweep / Extended)",
+            "take_profit_3": f"${tp3:.2f} (1:3.5 R:R - Session Runner)",
+            "trade_management": "Move Stop Loss to Break-Even immediately once TP1 is hit. Close 60% position at TP1, let 40% run to TP2/TP3. Average hold time: 5–30 mins."
+        },
+        "indicators": {
+            "atr_14_5m": round(atr_5m, 2),
+            "rsi_14_5m": round(rsi_5m, 1),
+            "rsi_14_15m": round(rsi_15m, 1),
+            "ema_9_5m": round(ema9_5m, 2),
+            "ema_21_5m": round(ema21_5m, 2),
+            "ema_50_5m": round(ema50_5m, 2),
+            "ema_20_15m": round(ema20_15m, 2),
+            "ema_50_15m": round(ema50_15m, 2),
+            "macd_hist_5m": round(macd_hist_5m, 3),
+            "dxy_trend": dxy_trend,
+            "dxy_price": round(dxy_price, 2) if dxy_price else "N/A"
+        },
+        "pivots_daily": pivots.get("classic", {}),
+        "fvgs_detected": fvgs_5m[:3],
+        "confluence_reasons": {
+            "bullish": bullish_factors,
+            "bearish": bearish_factors
+        }
+    }
+
+def analyze_gold(timeframe_mode="scalp"):
     """
     Main signal generation function.
-    Combines Daily, 1-Hour, 15-Minute candles + DXY index into an actionable trade setup.
+    Supports 'scalp', 'intraday', and 'swing' modes.
     """
+    if timeframe_mode == "scalp":
+        return analyze_gold_scalp()
+        
     # 1. Fetch data
     gold_15m = fetch_candles("GC=F", interval="15m", range_val="5d")
     gold_1h = fetch_candles("GC=F", interval="1h", range_val="1mo")
@@ -410,10 +612,17 @@ def print_terminal_report(res):
     
     print("\n[📊 KEY TECHNICALS & MACRO CONFLUENCE]")
     ind = res['indicators']
-    print(f"  • 1H RSI: {ind['rsi_14_1h']}  | Daily RSI: {ind['rsi_14_daily']} | 1H ATR (Volatility): ${ind['atr_14_1h']}")
-    print(f"  • 1H EMAs: 20 EMA: ${ind['ema_20_1h']} | 50 EMA: ${ind['ema_50_1h']} | 200 EMA: ${ind['ema_200_1h']}")
-    print(f"  • Daily Trend EMAs: 50 EMA: ${ind['ema_50_daily']} | 200 EMA: ${ind['ema_200_daily']}")
-    print(f"  • US Dollar Index (DXY): {ind['dxy_trend']} ({ind['dxy_price']})")
+    if 'atr_14_5m' in ind:
+        print(f"  • Execution Mode : Scalp (5M Execution / 15M Trend Structure)")
+        print(f"  • 5M RSI: {ind.get('rsi_14_5m')} | 15M RSI: {ind.get('rsi_14_15m')} | 5M ATR: ${ind.get('atr_14_5m')}")
+        print(f"  • 5M Fast EMAs: 9 EMA: ${ind.get('ema_9_5m')} | 21 EMA: ${ind.get('ema_21_5m')} | 50 EMA: ${ind.get('ema_50_5m')}")
+        print(f"  • 15M Trend EMAs: 20 EMA: ${ind.get('ema_20_15m')} | 50 EMA: ${ind.get('ema_50_15m')}")
+        print(f"  • US Dollar Index (DXY): {ind.get('dxy_trend')} ({ind.get('dxy_price')})")
+    else:
+        print(f"  • 1H RSI: {ind.get('rsi_14_1h')}  | Daily RSI: {ind.get('rsi_14_daily')} | 1H ATR (Volatility): ${ind.get('atr_14_1h')}")
+        print(f"  • 1H EMAs: 20 EMA: ${ind.get('ema_20_1h')} | 50 EMA: ${ind.get('ema_50_1h')} | 200 EMA: ${ind.get('ema_200_1h')}")
+        print(f"  • Daily Trend EMAs: 50 EMA: ${ind.get('ema_50_daily')} | 200 EMA: ${ind.get('ema_200_daily')}")
+        print(f"  • US Dollar Index (DXY): {ind.get('dxy_trend')} ({ind.get('dxy_price')})")
     
     print("\n[🎯 DAILY PIVOT LEVELS (XAU/USD)]")
     p = res['pivots_daily']
@@ -441,7 +650,7 @@ def print_terminal_report(res):
 def main():
     parser = argparse.ArgumentParser(description="Forex Gold (XAU/USD) Signal Generator")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
-    parser.add_argument("--timeframe", choices=["scalp", "intraday", "swing"], default="intraday", help="Trading style")
+    parser.add_argument("--timeframe", choices=["scalp", "intraday", "swing"], default="scalp", help="Trading style (default: scalp)")
     args = parser.parse_args()
     
     result = analyze_gold(timeframe_mode=args.timeframe)
