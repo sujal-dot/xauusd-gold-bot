@@ -290,45 +290,31 @@ def analyze_gold_scalp():
     
     if bear_score >= bull_score + 1:
         bias = "BEARISH"
-        confidence = min(round((bear_score / total) * 100), 90)
+        confidence = min(round((bear_score / total) * 100), 92)
+        signal_type = "SCALP SELL (CMP / MARKET ORDER)"
         
-        # In scalping, if RSI < 32 and 9 EMA is above price, sell the pullback retest
-        if rsi_5m < 32 and ema9_5m > current_price:
-            signal_type = "SCALP SELL (WAIT PULLBACK TO 9/21 EMA)"
-            entry_low = round(min(ema9_5m, ema21_5m), 2)
-            entry_high = round(max(ema9_5m, ema21_5m), 2)
-            ideal_entry = round((entry_low + entry_high) / 2, 2)
-            stop_loss = round(entry_high + sl_buffer, 2)
-        else:
-            signal_type = "SCALP SELL"
-            entry_low = round(current_price, 2)
-            entry_high = round(max(current_price + (atr_5m * 0.4), ema9_5m), 2)
-            ideal_entry = round(current_price, 2)
-            stop_loss = round(entry_high + sl_buffer, 2)
-            
+        # CMP-based direct entry (Instant Market Execution)
+        ideal_entry = round(current_price, 2)
+        entry_low = round(current_price, 2)
+        entry_high = round(current_price + 1.20, 2)
+        stop_loss = round(current_price + sl_buffer, 2)
         risk = round(abs(stop_loss - ideal_entry), 2)
+        
         tp1 = round(ideal_entry - (risk * 1.5), 2)
         tp2 = round(ideal_entry - (risk * 2.5), 2)
         tp3 = round(ideal_entry - (risk * 3.5), 2)
         
     elif bull_score >= bear_score + 1:
         bias = "BULLISH"
-        confidence = min(round((bull_score / total) * 100), 90)
+        confidence = min(round((bull_score / total) * 100), 92)
+        signal_type = "SCALP BUY (CMP / MARKET ORDER)"
         
-        if rsi_5m > 68 and ema9_5m < current_price:
-            signal_type = "SCALP BUY (WAIT PULLBACK TO 9/21 EMA)"
-            entry_low = round(min(ema9_5m, ema21_5m), 2)
-            entry_high = round(max(ema9_5m, ema21_5m), 2)
-            ideal_entry = round((entry_low + entry_high) / 2, 2)
-            stop_loss = round(entry_low - sl_buffer, 2)
-        else:
-            signal_type = "SCALP BUY"
-            entry_low = round(min(current_price - (atr_5m * 0.4), ema9_5m), 2)
-            entry_high = round(current_price, 2)
-            ideal_entry = round(current_price, 2)
-            stop_loss = round(entry_low - sl_buffer, 2)
-            
+        ideal_entry = round(current_price, 2)
+        entry_low = round(current_price - 1.20, 2)
+        entry_high = round(current_price, 2)
+        stop_loss = round(current_price - sl_buffer, 2)
         risk = round(abs(ideal_entry - stop_loss), 2)
+        
         tp1 = round(ideal_entry + (risk * 1.5), 2)
         tp2 = round(ideal_entry + (risk * 2.5), 2)
         tp3 = round(ideal_entry + (risk * 3.5), 2)
@@ -355,14 +341,17 @@ def analyze_gold_scalp():
         "bias": bias,
         "confidence_percent": confidence,
         "execution": {
-            "entry_range": f"${min(entry_low, entry_high):.2f} – ${max(entry_low, entry_high):.2f}",
-            "ideal_entry": f"${ideal_entry:.2f}",
+            "execution_type": "MARKET ORDER (CMP - Instant Execution)",
+            "cmp": f"${current_price:.2f}",
+            "entry_range": f"CMP ${current_price:.2f} (Immediate Fill: ${min(entry_low, entry_high):.2f} – ${max(entry_low, entry_high):.2f})",
+            "ideal_entry": f"${current_price:.2f} (CMP)",
             "stop_loss": f"${stop_loss:.2f}",
             "risk_per_ounce": f"${risk:.2f}",
-            "take_profit_1": f"${tp1:.2f} (1:1.5 R:R - Quick Scalp Target)",
-            "take_profit_2": f"${tp2:.2f} (1:2.5 R:R - Key Liquidity Sweep / Extended)",
-            "take_profit_3": f"${tp3:.2f} (1:3.5 R:R - Session Runner)",
-            "trade_management": "Move Stop Loss to Break-Even immediately once TP1 is hit. Close 60% position at TP1, let 40% run to TP2/TP3. Average hold time: 5–30 mins."
+            "take_profit_1": f"${tp1:.2f} (1:1.5 R:R | ITM Target 1: +${risk*1.5:.2f}/oz)",
+            "take_profit_2": f"${tp2:.2f} (1:2.5 R:R | ITM Target 2: +${risk*2.5:.2f}/oz - Liquidity Sweep)",
+            "take_profit_3": f"${tp3:.2f} (1:3.5 R:R | ITM Target 3: +${risk*3.5:.2f}/oz - Session Runner)",
+            "pullback_retest_zone": f"${min(ema9_5m, ema21_5m):.2f} – ${max(ema9_5m, ema21_5m):.2f}",
+            "trade_management": "Enter at CMP immediately. Move Stop Loss to Breakeven (CMP) once TP1 is hit. Close 50-60% profit at TP1."
         },
         "indicators": {
             "atr_14_5m": round(atr_5m, 2),

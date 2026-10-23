@@ -253,14 +253,15 @@ def analyze_currency_pair(pair_key: str, timeframe: str = "scalp"):
     decimals = 3 if "JPY" in pair_key else 5
     
     if bear_score >= bull_score + 1:
-        signal = "STRONG SELL" if bear_score >= 4 else "SELL (PULLBACK / FVG)"
+        signal = "STRONG SELL (CMP / MARKET ORDER)" if bear_score >= 4 else "SELL (CMP / MARKET ORDER)"
         bias = "BEARISH"
         confidence = min(round((bear_score / total_score) * 100), 92)
         
+        # Direct CMP-Based Instant Execution
+        ideal_entry = round(current_price, decimals)
         entry_low = round(current_price, decimals)
-        entry_high = round(max(current_price, ema21_5m), decimals)
-        ideal_entry = round((entry_low + entry_high) / 2, decimals)
-        stop_loss = round(entry_high + sl_price_diff, decimals)
+        entry_high = round(current_price + (sl_price_diff * 0.2), decimals)
+        stop_loss = round(current_price + sl_price_diff, decimals)
         risk = round(abs(stop_loss - ideal_entry), decimals)
         risk_pips = round(risk * pip_mult, 1)
         
@@ -269,14 +270,14 @@ def analyze_currency_pair(pair_key: str, timeframe: str = "scalp"):
         tp3 = round(ideal_entry - (risk * 3.5), decimals)
         
     elif bull_score >= bear_score + 1:
-        signal = "STRONG BUY" if bull_score >= 4 else "BUY (PULLBACK / DIP)"
+        signal = "STRONG BUY (CMP / MARKET ORDER)" if bull_score >= 4 else "BUY (CMP / MARKET ORDER)"
         bias = "BULLISH"
         confidence = min(round((bull_score / total_score) * 100), 92)
         
-        entry_low = round(min(current_price, ema21_5m), decimals)
+        ideal_entry = round(current_price, decimals)
+        entry_low = round(current_price - (sl_price_diff * 0.2), decimals)
         entry_high = round(current_price, decimals)
-        ideal_entry = round((entry_low + entry_high) / 2, decimals)
-        stop_loss = round(entry_low - sl_price_diff, decimals)
+        stop_loss = round(current_price - sl_price_diff, decimals)
         risk = round(abs(ideal_entry - stop_loss), decimals)
         risk_pips = round(risk * pip_mult, 1)
         
@@ -307,13 +308,15 @@ def analyze_currency_pair(pair_key: str, timeframe: str = "scalp"):
         "bias": bias,
         "confidence_percent": confidence,
         "execution": {
-            "entry_range": f"{min(entry_low, entry_high):.{decimals}f} – {max(entry_low, entry_high):.{decimals}f}",
-            "ideal_entry": f"{ideal_entry:.{decimals}f}",
-            "stop_loss": f"{stop_loss:.{decimals}f} ({risk_pips} pips risk)",
-            "take_profit_1": f"{tp1:.{decimals}f} (1:1.5 R:R | +{round(risk_pips*1.5, 1)} pips)",
-            "take_profit_2": f"{tp2:.{decimals}f} (1:2.5 R:R | +{round(risk_pips*2.5, 1)} pips - Key Liquidity Sweep)",
-            "take_profit_3": f"{tp3:.{decimals}f} (1:3.5 R:R | +{round(risk_pips*3.5, 1)} pips - Lipschutz Asymmetric Target)",
-            "rules": "Close 50% at TP1 and move Stop Loss to Breakeven immediately. Trail runner."
+            "execution_type": "MARKET ORDER (CMP - Instant Execution)",
+            "cmp": f"{current_price:.{decimals}f}",
+            "entry_range": f"CMP {current_price:.{decimals}f} (Fill Zone: {min(entry_low, entry_high):.{decimals}f} – {max(entry_low, entry_high):.{decimals}f})",
+            "ideal_entry": f"{ideal_entry:.{decimals}f} (CMP)",
+            "stop_loss": f"{stop_loss:.{decimals}f} ({risk_pips} pips risk from CMP)",
+            "take_profit_1": f"{tp1:.{decimals}f} (1:1.5 R:R | +{round(risk_pips*1.5, 1)} pips ITM Target 1)",
+            "take_profit_2": f"{tp2:.{decimals}f} (1:2.5 R:R | +{round(risk_pips*2.5, 1)} pips ITM Target 2 - Key Liquidity Sweep)",
+            "take_profit_3": f"{tp3:.{decimals}f} (1:3.5 R:R | +{round(risk_pips*3.5, 1)} pips ITM Target 3 - Lipschutz Asymmetric Target)",
+            "rules": "Enter immediately at CMP. Close 50% at TP1 and move Stop Loss to Breakeven (CMP) immediately. Trail runner."
         },
         "technicals": {
             "5m_rsi": round(rsi_5m, 1),
