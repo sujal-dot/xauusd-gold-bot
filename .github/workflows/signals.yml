@@ -41,6 +41,10 @@ jobs:
         run: |
           python3 currency_scanner.py
 
+      - name: Generate Weekly Recommendation History & Audit Report
+        run: |
+          python3 trade_history.py
+
       - name: Broadcast to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
