@@ -85,9 +85,13 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str) -> bool:
 def is_active_session():
     """
     Returns True if current UTC time is within active market sessions.
-    - Asian Session: 01:00 - 05:00 UTC (06:30 AM - 10:30 AM IST)
-    - London Session: 07:00 - 11:30 UTC (12:30 PM - 05:00 PM IST)
-    - NY / Overlap: 12:00 - 19:00 UTC (05:30 PM - 12:30 AM IST)
+    - Asian / Tokyo Session: 00:00 - 06:00 UTC (05:30 AM - 11:30 AM IST)
+    - London Morning Session: 06:00 - 12:00 UTC (11:30 AM - 05:30 PM IST)
+    - London / New York Overlap (Peak Liquidity): 12:00 - 16:30 UTC (05:30 PM - 10:00 PM IST)
+    - New York Afternoon Session: 16:30 - 21:00 UTC (10:00 PM - 02:30 AM IST)
+    - Sydney / Asian Open: 22:00 - 24:00 UTC (03:30 AM - 05:30 AM IST)
+    - Daily Rollover Window: 21:00 - 22:00 UTC (spread widening caution)
+    - Weekend: Saturday & Sunday (Closed)
     """
     now_utc = datetime.now(timezone.utc)
     hour = now_utc.hour + now_utc.minute / 60.0
@@ -96,18 +100,18 @@ def is_active_session():
     if now_utc.weekday() in (5, 6): # Saturday, Sunday
         return False, "Market Closed (Weekend)"
         
-    in_asian = 1.0 <= hour <= 5.0
-    in_london = 7.0 <= hour <= 11.5
-    in_ny = 12.0 <= hour <= 19.0
-    
-    if in_asian:
+    if 0.0 <= hour < 6.0:
         return True, "Asian / Tokyo Session"
-    elif in_london:
-        return True, "London Open Session"
-    elif in_ny:
-        return True, "New York / London Overlap Session"
+    elif 6.0 <= hour < 12.0:
+        return True, "London Morning Session"
+    elif 12.0 <= hour < 16.5:
+        return True, "London / New York Overlap (Peak Liquidity)"
+    elif 16.5 <= hour < 21.0:
+        return True, "New York Afternoon Session"
+    elif 22.0 <= hour <= 24.0:
+        return True, "Sydney / Asian Open"
     else:
-        return False, "Off-hours (Low Liquidity)"
+        return False, "Daily Market Rollover (21:00-22:00 UTC spread spike)"
 
 def format_telegram_alert(res: dict, session_name: str) -> str:
     """Formats the signal analysis into a professional, mobile-friendly Telegram alert."""
@@ -118,18 +122,19 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
     ind = res["indicators"]
     p = res.get("pivots_daily", {})
     tf = res.get("timeframe", "Scalp (5M / 15M)")
+    src = res.get("price_source", "Spot XAU/USD Live")
     
     lines = [
         f"{icon} *{sig} ALERT: XAU/USD (Gold)*",
         f"⏱ *Mode*: `{tf}` | *Session*: {session_name}",
         f"🕒 *Time*: `{res['timestamp']}`",
-        f"💵 *Current Price*: `${res['current_price']:.2f}`",
+        f"💵 *Live Spot CMP*: `${res['current_price']:.2f}` ({src})",
         f"🎯 *Confidence*: `{res['confidence_percent']}%` | *Bias*: `{res['bias']}`",
         "",
         "───────────────",
         "📋 *EXECUTION PLAN*",
         f"• *Action*: `{res['bias']}`",
-        f"• *Entry Zone*: `{ex['entry_range']}`",
+        f"• *Entry Zone (CMP)*: `{ex['entry_range']}`",
         f"• *Stop Loss*: `{ex['stop_loss']}` (Risk: `{ex['risk_per_ounce']}/oz`)",
         f"• *Target 1 (TP1)*: `{ex['take_profit_1']}`",
         f"• *Target 2 (TP2)*: `{ex['take_profit_2']}`",
@@ -233,10 +238,24 @@ def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
     last_price = last_state.get("price", 0)
     curr_price = res["current_price"]
     
-    # In scalping, a $3.50+ move is a complete trade setup; in swing, $10.0+
-    min_price_move = 3.5 if timeframe == "scalp" else 10.0
-    if not force and last_sig == signal and abs(curr_price - last_price) < min_price_move:
-        print(f"[-] Signal unchanged and price within ${min_price_move} of last alert. Skipping to avoid spam.")
+    # In scalping, a $1.20+ move is a fresh 5M entry setup; in swing, $6.0+
+    min_price_move = 1.20 if timeframe == "scalp" else 6.0
+    last_time_str = last_state.get("timestamp", "")
+    time_elapsed_min = 999.0
+    if last_time_str:
+        try:
+            t_last = datetime.strptime(last_time_str, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
+            time_elapsed_min = (datetime.now(timezone.utc) - t_last).total_seconds() / 60.0
+        except Exception:
+            pass
+            
+    # Send if:
+    # 1. Force is enabled
+    # 2. Signal direction changed (e.g. BUY -> SELL)
+    # 3. Price moved by $1.20+ (fresh entry zone)
+    # 4. At least 15 minutes elapsed since last alert and setup remains active
+    if not force and last_sig == signal and abs(curr_price - last_price) < min_price_move and time_elapsed_min < 15.0:
+        print(f"[-] Active {signal} setup at ${curr_price:.2f} (price moved ${abs(curr_price - last_price):.2f} < ${min_price_move}, last alert {time_elapsed_min:.1f}m ago). Skipping duplicate.")
         return False
         
     # Send alert
@@ -261,7 +280,8 @@ def main():
     parser.add_argument("--test", action="store_true", help="Send a test message to Telegram")
     parser.add_argument("--force", action="store_true", help="Run analysis regardless of session hours")
     parser.add_argument("--timeframe", choices=["scalp", "intraday", "swing"], default="scalp", help="Signal timeframe mode (default: scalp)")
-    parser.add_argument("--daemon", action="store_true", help="Run continuous loop (checks every 15 minutes during prime sessions)")
+    parser.add_argument("--interval", type=int, default=300, help="Daemon check interval in seconds (default: 300 = 5 minutes)")
+    parser.add_argument("--daemon", action="store_true", help="Run continuous loop (checks every 5 minutes during trading sessions)")
     args = parser.parse_args()
     
     if args.setup or (args.token and args.chat_id):
@@ -283,13 +303,15 @@ def main():
         sys.exit(0)
         
     if args.daemon:
-        print("[*] Starting Telegram Gold Signal daemon (checking every 15 min during London/NY)...")
+        interval_sec = max(args.interval, 30)
+        interval_min = interval_sec / 60.0
+        print(f"[*] Starting Telegram Gold Signal daemon (checking every {interval_min:.1f} min / {interval_sec}s)...")
         while True:
             try:
                 run_check(force=args.force, timeframe=args.timeframe)
             except Exception as e:
                 print(f"[!] Daemon error: {e}")
-            time.sleep(900) # 15 minutes
+            time.sleep(interval_sec)
     else:
         run_check(force=args.force, timeframe=args.timeframe)
 

@@ -2,8 +2,8 @@ name: XAUUSD Forex Gold Scalper & Signal Broadcaster
 
 on:
   schedule:
-    # Runs every 15 minutes across Asian (01:00-04:45 UTC), London (07:00-11:45 UTC), and NY (12:00-19:45 UTC) Mon-Fri
-    - cron: '*/15 1-4,7-11,12-19 * * 1-5'
+    # Runs every 5 minutes across Asian, London, and NY trading sessions Mon-Fri
+    - cron: '*/5 0-21 * * 1-5'
   workflow_dispatch:
     inputs:
       timeframe:
@@ -33,19 +33,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Run Gold Scalp Signal Engine
-        run: |
-          python3 gold_signal.py --timeframe "${{ github.event.inputs.timeframe || 'scalp' }}"
-
-      - name: Scan Best Currency Setups & Intermarket Confluence
-        run: |
-          python3 currency_scanner.py
-
-      - name: Generate Weekly Recommendation History & Audit Report
-        run: |
-          python3 trade_history.py
-
-      - name: Broadcast to Telegram
+      - name: Fast 5-Minute Spot Gold Scalp Check & Telegram Broadcast
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

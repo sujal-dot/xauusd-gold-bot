@@ -46,6 +46,65 @@ def fetch_candles(symbol: str, interval: str = "1h", range_val: str = "5d"):
     except Exception as e:
         return []
 
+def get_live_gold_spot():
+    """
+    Fetches real-time Spot Gold (XAU/USD) price matching live Forex broker terminals.
+    Priority order:
+    1. Direct live Gold API (api.gold-api.com) - sub-second Spot XAU/USD quote
+    2. Yahoo XAUT-USD (Tether Gold - 1:1 Spot fine troy ounce)
+    3. Yahoo GC=F (COMEX Gold Front Month Futures fallback)
+    """
+    # 1. Direct spot API
+    try:
+        req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            p = data.get("price")
+            if p and float(p) > 0:
+                return round(float(p), 2), "Spot XAU/USD (Gold-API Live)"
+    except Exception:
+        pass
+
+    # 2. Yahoo XAUT-USD (Spot Gold proxy)
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUT-USD?interval=1m&range=1d"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            meta = data["chart"]["result"][0]["meta"]
+            quotes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+            valid = [q for q in quotes if q is not None]
+            p = valid[-1] if valid else meta.get("regularMarketPrice")
+            if p and float(p) > 0:
+                return round(float(p), 2), "Spot XAU/USD (XAUT Tick)"
+    except Exception:
+        pass
+
+    # 3. Yahoo GC=F fallback
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            meta = data["chart"]["result"][0]["meta"]
+            p = meta.get("regularMarketPrice")
+            if p and float(p) > 0:
+                return round(float(p), 2), "COMEX Gold Futures (GC=F)"
+    except Exception:
+        pass
+
+    return None, None
+
+def fetch_gold_candles(interval: str = "5m", range_val: str = "2d"):
+    """
+    Fetches Gold candle bars, prioritizing Spot Gold (XAUT-USD) so that
+    all price levels match Forex broker charts (XAUUSD) instead of COMEX Futures premium.
+    """
+    candles = fetch_candles("XAUT-USD", interval=interval, range_val=range_val)
+    if not candles or len(candles) < 15:
+        candles = fetch_candles("GC=F", interval=interval, range_val=range_val)
+    return candles
+
 def calculate_ema(prices, period):
     """Calculates Exponential Moving Average (EMA)."""
     if len(prices) < period:
@@ -264,15 +323,28 @@ def analyze_gold_scalp():
     Focuses on 5M execution, 15M structure, 5M EMAs (9, 21, 50), tight ATR stops ($2.50-$4.50),
     Fair Value Gaps (FVG), micro liquidity sweeps, and fast DXY 15M correlation.
     """
-    gold_5m = fetch_candles("GC=F", interval="5m", range_val="2d")
-    gold_15m = fetch_candles("GC=F", interval="15m", range_val="5d")
-    gold_daily = fetch_candles("GC=F", interval="1d", range_val="6mo")
+    gold_5m = fetch_gold_candles(interval="5m", range_val="2d")
+    gold_15m = fetch_gold_candles(interval="15m", range_val="5d")
+    gold_daily = fetch_gold_candles(interval="1d", range_val="6mo")
     dxy_15m = fetch_candles("DX-Y.NYB", interval="15m", range_val="5d")
     
     if not gold_5m or not gold_15m:
         return {"error": "Unable to fetch 5M/15M Gold market data from provider. Verify internet connection."}
         
-    current_price = gold_5m[-1]["close"]
+    live_price, price_source = get_live_gold_spot()
+    if live_price is not None:
+        current_price = live_price
+    else:
+        current_price = gold_5m[-1]["close"]
+        price_source = "5M Candle Close"
+
+    # Synchronize latest 5m candle close to live real-time spot price
+    gold_5m[-1]["close"] = current_price
+    if current_price > gold_5m[-1]["high"]:
+        gold_5m[-1]["high"] = current_price
+    elif current_price < gold_5m[-1]["low"]:
+        gold_5m[-1]["low"] = current_price
+
     prices_5m = [c["close"] for c in gold_5m]
     prices_15m = [c["close"] for c in gold_15m]
     
@@ -421,6 +493,7 @@ def analyze_gold_scalp():
         "timeframe": "5M Execution / 15M Trend",
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "current_price": round(current_price, 2),
+        "price_source": price_source,
         "signal": signal_type,
         "bias": bias,
         "confidence_percent": confidence,
@@ -485,15 +558,22 @@ def analyze_gold(timeframe_mode="scalp"):
         return analyze_gold_scalp()
         
     # 1. Fetch data
-    gold_15m = fetch_candles("GC=F", interval="15m", range_val="5d")
-    gold_1h = fetch_candles("GC=F", interval="1h", range_val="1mo")
-    gold_daily = fetch_candles("GC=F", interval="1d", range_val="6mo")
+    gold_15m = fetch_gold_candles(interval="15m", range_val="5d")
+    gold_1h = fetch_gold_candles(interval="1h", range_val="1mo")
+    gold_daily = fetch_gold_candles(interval="1d", range_val="6mo")
     dxy_1h = fetch_candles("DX-Y.NYB", interval="1h", range_val="5d")
     
     if not gold_1h or not gold_daily:
         return {"error": "Unable to fetch Gold market data from provider. Verify internet connection."}
     
-    current_price = gold_1h[-1]["close"]
+    live_price, price_source = get_live_gold_spot()
+    if live_price is not None:
+        current_price = live_price
+    else:
+        current_price = gold_1h[-1]["close"]
+        price_source = "1H Candle Close"
+
+    gold_1h[-1]["close"] = current_price
     prices_1h = [c["close"] for c in gold_1h]
     prices_daily = [c["close"] for c in gold_daily]
     
@@ -641,8 +721,10 @@ def analyze_gold(timeframe_mode="scalp"):
 
     return {
         "asset": "XAU/USD (Gold)",
+        "timeframe": timeframe_mode.capitalize(),
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "current_price": round(current_price, 2),
+        "price_source": price_source,
         "signal": signal_type,
         "bias": bias,
         "confidence_percent": confidence,
@@ -685,7 +767,8 @@ def print_terminal_report(res):
         
     print("\n" + "=" * 65)
     print(f"  ★ FOREX GOLD (XAU/USD) INSTITUTIONAL SIGNAL & ANALYSIS ★")
-    print(f"  Generated: {res['timestamp']} | Current Price: ${res['current_price']:.2f}")
+    src = res.get('price_source', 'Spot XAU/USD')
+    print(f"  Generated: {res['timestamp']} | CMP: ${res['current_price']:.2f} ({src})")
     print("=" * 65)
     
     sig = res['signal']

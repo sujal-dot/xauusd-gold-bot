@@ -114,11 +114,14 @@ def format_telegram_weekly_report(data: dict) -> str:
     ])
     return "\n".join(lines)
 
-def audit_weekly_performance(symbol: str = "GC=F", asset_name: str = "XAU/USD (Gold)"):
+def audit_weekly_performance(symbol: str = "XAUT-USD", asset_name: str = "XAU/USD (Spot Gold)"):
     """
     Simulates and audits all institutional recommendation signals across the 5-day trading week.
+    Prioritizes Spot Gold (XAUT-USD) so that audit prices match broker execution charts.
     """
     candles_5m = fetch_candles(symbol, interval="5m", range_val="5d")
+    if not candles_5m or len(candles_5m) < 100:
+        candles_5m = fetch_candles("GC=F", interval="5m", range_val="5d")
     if not candles_5m or len(candles_5m) < 100:
         return {"error": "Insufficient historical data for weekly audit."}
         
