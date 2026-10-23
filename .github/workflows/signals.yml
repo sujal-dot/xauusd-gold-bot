@@ -4,6 +4,8 @@ on:
   schedule:
     # Runs every 5 minutes across Asian, London, and NY trading sessions Mon-Fri
     - cron: '*/5 0-21 * * 1-5'
+    # Runs every 5 minutes during Sunday evening Asian market open (22:00-23:55 UTC)
+    - cron: '*/5 22-23 * * 0'
   workflow_dispatch:
     inputs:
       timeframe:
@@ -32,6 +34,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Restore Signal State Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.gemini/config/forex_signal_state.json
+          key: signal-state-${{ github.run_id }}
+          restore-keys: |
+            signal-state-
 
       - name: Fast 5-Minute Spot Gold Scalp Check & Telegram Broadcast
         env:

@@ -91,14 +91,23 @@ def is_active_session():
     - New York Afternoon Session: 16:30 - 21:00 UTC (10:00 PM - 02:30 AM IST)
     - Sydney / Asian Open: 22:00 - 24:00 UTC (03:30 AM - 05:30 AM IST)
     - Daily Rollover Window: 21:00 - 22:00 UTC (spread widening caution)
-    - Weekend: Saturday & Sunday (Closed)
+    - Weekend: Saturday (all day) & Sunday (until 22:00 UTC Asian open)
     """
     now_utc = datetime.now(timezone.utc)
     hour = now_utc.hour + now_utc.minute / 60.0
+    weekday = now_utc.weekday()
     
-    # Exclude weekend
-    if now_utc.weekday() in (5, 6): # Saturday, Sunday
-        return False, "Market Closed (Weekend)"
+    # Saturday is fully closed
+    if weekday == 5:
+        return False, "Market Closed (Saturday)"
+        
+    # Sunday before Asian open (22:00 UTC) is closed
+    if weekday == 6 and hour < 22.0:
+        return False, "Market Closed (Sunday Pre-Open)"
+        
+    # Friday after 21:30 UTC is market close
+    if weekday == 4 and hour >= 21.5:
+        return False, "Market Closed (Weekend Close)"
         
     if 0.0 <= hour < 6.0:
         return True, "Asian / Tokyo Session"
