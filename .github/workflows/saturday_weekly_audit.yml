@@ -1,0 +1,26 @@
+name: Saturday Weekly Performance Audit to Telegram
+
+on:
+  schedule:
+    # Runs automatically every Saturday at 08:00 UTC (1:30 PM IST) after market week closes
+    - cron: '0 8 * * 6'
+  workflow_dispatch: # Allows manual 1-click trigger anytime to send weekly audit
+
+jobs:
+  saturday-weekly-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Weekly Performance Audit & Broadcast to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 trade_history.py --telegram

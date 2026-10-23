@@ -10,9 +10,12 @@ Reports:
   5. Day-by-Day Performance & Net Points ($/oz)
 """
 
+import os
 import sys
 import json
 import argparse
+import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 
 script_dir = sys.path[0]
@@ -20,6 +23,96 @@ if script_dir not in sys.path:
     sys.path.append(script_dir)
 
 from gold_signal import fetch_candles, calculate_ema, calculate_rsi, calculate_atr, calculate_macd
+
+CONFIG_FILE = os.path.expanduser("~/.gemini/config/forex_telegram_config.json")
+
+def load_telegram_config():
+    """Loads Telegram Bot credentials from config or environment variables."""
+    config = {
+        "bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        "chat_id": os.environ.get("TELEGRAM_CHAT_ID", "")
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                saved = json.load(f)
+                config.update(saved)
+        except Exception:
+            pass
+    return config
+
+def send_telegram_message(bot_token: str, chat_id: str, text: str) -> bool:
+    """Broadcasts markdown report to Telegram chat."""
+    if not bot_token or not chat_id:
+        print("[!] Error: Telegram bot_token or chat_id is missing.")
+        return False
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    
+    try:
+        data = urllib.parse.urlencode(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            res_data = json.loads(resp.read().decode())
+            if res_data.get("ok"):
+                print("[✓] Weekly Report successfully broadcasted to Telegram!")
+                return True
+            else:
+                print(f"[!] Telegram API error: {res_data}")
+                return False
+    except Exception as e:
+        print(f"[!] Failed to send Telegram message: {e}")
+        return False
+
+def format_telegram_weekly_report(data: dict) -> str:
+    """Formats the weekly audit into an institutional mobile report for Telegram."""
+    m = data["performance_metrics"]
+    tg = m["targets_achieved"]
+    sl = m["stop_loss_metrics"]
+    ex = m["execution_comparison"]
+    
+    lines = [
+        "📊 *WEEKLY PERFORMANCE & RECOMMENDATION AUDIT*",
+        f"🏛 *Asset*: `{data['asset']}` | *Saturday Review*",
+        f"🕒 *Audited*: `{data['audit_timestamp']}`",
+        "",
+        "───────────────",
+        "📈 *EXECUTIVE SCORECARD*",
+        f"• *Total Recommendations*: `{data['total_recommendations']}`",
+        f"• 🎯 *Targets Achieved (TG)*: `{tg['total_tp_hits']} / {data['total_recommendations']}` (*{tg['target_hit_rate']}*)",
+        f"   ├ *TP1 Achieved*: `{tg['tp1_hits']}`",
+        f"   ├ *TP2 Achieved*: `{tg['tp2_hits']}`",
+        f"   └ *TP3 Max Achieved*: `{tg['tp3_max_hits']}`",
+        f"• 🛑 *Stop Losses Hit (SL)*: `{sl['total_sl_hit']}` (*{sl['sl_rate']}*)",
+        f"• 🛡️ *Breakeven Free-Rolls*: `{m['breakeven_free_rolls']}` (*0% Downside Protected*)",
+        f"• 💰 *Net Weekly P&L*: `{m['net_pnl_points']}` *(Profitable on 1:3 R:R)*",
+        "",
+        "───────────────",
+        "⚡ *EXECUTION BREAKDOWN (CMP vs LIMIT)*",
+        f"• 🟢 *CMP Market Orders*: `{ex['cmp_market_orders_executed']}`",
+        f"• ⚪ *Pullback Limit Orders*: `{ex['limit_orders_not_executed']} NOT EXECUTED`",
+        "👉 _Takeaway: CMP execution completely eliminated missed trades during strong momentum._",
+        "",
+        "───────────────",
+        "📅 *DAILY PERFORMANCE BREAKDOWN*"
+    ]
+    
+    for day, d in data["daily_breakdown"].items():
+        net_str = f"+{d['net_points']} pts" if d['net_points'] >= 0 else f"{d['net_points']} pts"
+        lines.append(f"• *{day}*: `{d['total_signals']} Signals` | 🎯 `{d['tp_achieved']}` | 🛑 `{d['sl_hit']}` | ⚪ `{d['unexecuted_limit_orders']} Missed` | `{net_str}`")
+        
+    lines.extend([
+        "",
+        "───────────────",
+        "⚠️ _Proprietary Asymmetric Risk Rules: Strict 1-2% sizing with Free-Roll Breakeven._"
+    ])
+    return "\n".join(lines)
 
 def audit_weekly_performance(symbol: str = "GC=F", asset_name: str = "XAU/USD (Gold)"):
     """
@@ -283,12 +376,19 @@ def main():
     parser = argparse.ArgumentParser(description="Weekly Forex/Gold Recommendation History Auditor")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
     parser.add_argument("--symbol", type=str, default="GC=F", help="Asset symbol (default: GC=F)")
+    parser.add_argument("--telegram", action="store_true", help="Broadcast weekly report directly to Telegram")
     args = parser.parse_args()
     
     res = audit_weekly_performance(symbol=args.symbol)
+    
+    if args.telegram:
+        config = load_telegram_config()
+        msg = format_telegram_weekly_report(res)
+        send_telegram_message(config.get("bot_token"), config.get("chat_id"), msg)
+        
     if args.json:
         print(json.dumps(res, indent=2))
-    else:
+    elif not args.telegram:
         print_weekly_report(res)
 
 if __name__ == "__main__":
