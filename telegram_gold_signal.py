@@ -20,8 +20,31 @@ if script_dir not in sys.path:
 
 from gold_signal import analyze_gold
 
-CONFIG_FILE = os.path.expanduser("~/.gemini/config/forex_telegram_config.json")
-STATE_FILE = os.path.expanduser("~/.gemini/config/forex_signal_state.json")
+CONFIG_FILE = os.environ.get("CONFIG_FILE", os.path.expanduser("~/.gemini/config/forex_telegram_config.json"))
+STATE_FILE = os.environ.get("STATE_FILE", os.path.expanduser("~/.gemini/config/forex_signal_state.json"))
+
+def load_state() -> dict:
+    """Loads previous signal state safely."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[!] Warning reading state file: {e}")
+    return {}
+
+def save_state(signal: str, price: float, timestamp: str):
+    """Safely saves current signal state ensuring parent directory exists."""
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump({
+                "signal": signal,
+                "price": price,
+                "timestamp": timestamp
+            }, f, indent=2)
+    except Exception as e:
+        print(f"[!] Warning saving state file ({e})")
 
 def load_config():
     """Loads Telegram Bot Token and Chat ID from config or environment."""
@@ -235,13 +258,7 @@ def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
         return False
         
     # Check state file to prevent duplicate alerts
-    last_state = {}
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                last_state = json.load(f)
-        except Exception:
-            pass
+    last_state = load_state()
             
     last_sig = last_state.get("signal")
     last_price = last_state.get("price", 0)
@@ -271,13 +288,8 @@ def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
     msg = format_telegram_alert(res, session_name)
     success = send_telegram_message(bot_token, chat_id, msg)
     if success:
-        # Save state
-        with open(STATE_FILE, "w") as f:
-            json.dump({
-                "signal": signal,
-                "price": curr_price,
-                "timestamp": res["timestamp"]
-            }, f)
+        # Save state safely
+        save_state(signal, curr_price, res["timestamp"])
     return success
 
 def main():

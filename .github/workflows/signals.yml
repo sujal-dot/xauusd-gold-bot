@@ -35,6 +35,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Ensure Config Directory Exists
+        run: mkdir -p ~/.gemini/config
+
       - name: Restore Signal State Cache
         uses: actions/cache@v4
         with:
