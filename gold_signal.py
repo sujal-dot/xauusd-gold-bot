@@ -11,7 +11,7 @@ import json
 import argparse
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -186,6 +186,59 @@ def calculate_pivot_points(candles_daily):
         }
     }
 
+def calculate_session_levels(candles_5m):
+    """
+    Calculates Asian Session High, Low, and Midpoint (00:00 - 06:00 UTC)
+    and identifies active institutional session liquidity sweeps (Judas Swings) or expansion breakdowns.
+    """
+    if not candles_5m:
+        return {}
+        
+    today_utc = datetime.now(timezone.utc).date()
+    asian_candles = []
+    for c in candles_5m:
+        dt = datetime.fromtimestamp(c["timestamp"], tz=timezone.utc)
+        if dt.date() == today_utc and 0 <= dt.hour < 6:
+            asian_candles.append(c)
+    if not asian_candles and len(candles_5m) >= 24:
+        asian_candles = candles_5m[-24:-6]
+        
+    if not asian_candles:
+        return {}
+        
+    a_high = round(max(c["high"] for c in asian_candles), 2)
+    a_low = round(min(c["low"] for c in asian_candles), 2)
+    a_mid = round((a_high + a_low) / 2.0, 2)
+    curr = candles_5m[-1]["close"]
+    last = candles_5m[-1]
+    last_low = last["low"]
+    last_high = last["high"]
+    
+    sweep_status = "INSIDE_SESSION_RANGE"
+    sweep_note = f"Trading within Asian Session Range (${a_low} – ${a_high})"
+    
+    # ICT Judas Swing Liquidity Sweep Rules
+    if last_low <= a_low and curr >= a_low - 1.5:
+        sweep_status = "BULLISH_LIQUIDITY_SWEEP (JUDAS SWING)"
+        sweep_note = f"Asian Low (${a_low}) sell-stops swept to ${last_low}. Institutional rejection wick active."
+    elif last_high >= a_high and curr <= a_high + 1.5:
+        sweep_status = "BEARISH_LIQUIDITY_SWEEP (JUDAS SWING)"
+        sweep_note = f"Asian High (${a_high}) buy-stops swept to ${last_high}. Institutional rejection wick active."
+    elif curr < a_low:
+        sweep_status = "BEARISH_SESSION_BREAKDOWN (SELL-SIDE EXPANSION)"
+        sweep_note = f"Clean breakdown below Asian Low (${a_low}). Sell-side liquidity expansion active."
+    elif curr > a_high:
+        sweep_status = "BULLISH_SESSION_EXPANSION (BUY-SIDE EXPANSION)"
+        sweep_note = f"Clean breakout above Asian High (${a_high}). Buy-side liquidity expansion active."
+        
+    return {
+        "asian_high": a_high,
+        "asian_low": a_low,
+        "asian_mid": a_mid,
+        "sweep_status": sweep_status,
+        "sweep_note": sweep_note
+    }
+
 def analyze_gold_scalp():
     """
     Dedicated high-frequency scalping engine for Gold (XAU/USD).
@@ -203,6 +256,9 @@ def analyze_gold_scalp():
     current_price = gold_5m[-1]["close"]
     prices_5m = [c["close"] for c in gold_5m]
     prices_15m = [c["close"] for c in gold_15m]
+    
+    # Session Liquidity Levels (Asian Range & Judas Sweeps)
+    session_info = calculate_session_levels(gold_5m)
     
     # 5M Indicators (Execution)
     ema9_5m = calculate_ema(prices_5m, 9)[-1]
@@ -235,6 +291,14 @@ def analyze_gold_scalp():
             
     bullish_factors = []
     bearish_factors = []
+    
+    # Session Sweep Confluence
+    if session_info:
+        sweep_stat = session_info.get("sweep_status", "")
+        if "BULLISH" in sweep_stat:
+            bullish_factors.append(f"Institutional Liquidity: {session_info['sweep_note']}")
+        elif "BEARISH" in sweep_stat:
+            bearish_factors.append(f"Institutional Liquidity: {session_info['sweep_note']}")
     
     # Trend & EMA Alignment
     if current_price > ema9_5m > ema21_5m:
@@ -291,9 +355,9 @@ def analyze_gold_scalp():
     if bear_score >= bull_score + 1:
         bias = "BEARISH"
         confidence = min(round((bear_score / total) * 100), 92)
-        signal_type = "SCALP SELL (CMP / MARKET ORDER)"
+        signal_type = "SCALP SELL (CMP / FREE-ROLL PROTOCOL)"
         
-        # CMP-based direct entry (Instant Market Execution)
+        # Direct CMP-Based Instant Execution
         ideal_entry = round(current_price, 2)
         entry_low = round(current_price, 2)
         entry_high = round(current_price + 1.20, 2)
@@ -307,7 +371,7 @@ def analyze_gold_scalp():
     elif bull_score >= bear_score + 1:
         bias = "BULLISH"
         confidence = min(round((bull_score / total) * 100), 92)
-        signal_type = "SCALP BUY (CMP / MARKET ORDER)"
+        signal_type = "SCALP BUY (CMP / FREE-ROLL PROTOCOL)"
         
         ideal_entry = round(current_price, 2)
         entry_low = round(current_price - 1.20, 2)
@@ -341,18 +405,25 @@ def analyze_gold_scalp():
         "bias": bias,
         "confidence_percent": confidence,
         "execution": {
-            "execution_type": "MARKET ORDER (CMP - Instant Execution)",
+            "execution_type": "MARKET ORDER AT CMP (FREE-ROLL RISK PROTOCOL)",
             "cmp": f"${current_price:.2f}",
             "entry_range": f"CMP ${current_price:.2f} (Immediate Fill: ${min(entry_low, entry_high):.2f} – ${max(entry_low, entry_high):.2f})",
             "ideal_entry": f"${current_price:.2f} (CMP)",
             "stop_loss": f"${stop_loss:.2f}",
             "risk_per_ounce": f"${risk:.2f}",
-            "take_profit_1": f"${tp1:.2f} (1:1.5 R:R | ITM Target 1: +${risk*1.5:.2f}/oz)",
-            "take_profit_2": f"${tp2:.2f} (1:2.5 R:R | ITM Target 2: +${risk*2.5:.2f}/oz - Liquidity Sweep)",
+            "take_profit_1": f"${tp1:.2f} (1:1.5 R:R | ITM Target 1: +${risk*1.5:.2f}/oz - Lock 50% & SL to Breakeven)",
+            "take_profit_2": f"${tp2:.2f} (1:2.5 R:R | ITM Target 2: +${risk*2.5:.2f}/oz - Session Liquidity Sweep)",
             "take_profit_3": f"${tp3:.2f} (1:3.5 R:R | ITM Target 3: +${risk*3.5:.2f}/oz - Session Runner)",
+            "free_roll_protocol": {
+                "step_1": f"Enter immediately at CMP (${current_price:.2f}) with tight stop at ${stop_loss:.2f} (Risk: ${risk:.2f}/oz).",
+                "step_2": f"When TP1 (${tp1:.2f}) is hit, close 50% partial profit (+${risk*1.5:.2f}/oz profit locked).",
+                "step_3": f"IMMEDIATELY drag Stop Loss to exact entry CMP (${current_price:.2f}).",
+                "guarantee": "0% DOWNSIDE RISK. Downside is mathematically eliminated. Trade becomes a free roll (Win or $0.00 Breakeven)."
+            },
             "pullback_retest_zone": f"${min(ema9_5m, ema21_5m):.2f} – ${max(ema9_5m, ema21_5m):.2f}",
-            "trade_management": "Enter at CMP immediately. Move Stop Loss to Breakeven (CMP) once TP1 is hit. Close 50-60% profit at TP1."
+            "trade_management": "Enter at CMP immediately. Close 50% profit at TP1 and slide Stop Loss to CMP Breakeven for a 0% downside free roll."
         },
+        "session_levels": session_info,
         "indicators": {
             "atr_14_5m": round(atr_5m, 2),
             "rsi_14_5m": round(rsi_5m, 1),
@@ -597,7 +668,23 @@ def print_terminal_report(res):
     print(f"  • Target 1     : {ex['take_profit_1']}")
     print(f"  • Target 2     : {ex['take_profit_2']}")
     print(f"  • Target 3     : {ex['take_profit_3']}")
-    print(f"  • Rules        : {ex['trade_management']}")
+    
+    fr = ex.get('free_roll_protocol')
+    if fr:
+        print("\n[🛡️ THE ZERO-DOWNSIDE FREE-ROLL PROTOCOL]")
+        print(f"  • Step 1: {fr.get('step_1')}")
+        print(f"  • Step 2: {fr.get('step_2')}")
+        print(f"  • Step 3: {fr.get('step_3')}")
+        print(f"  ★ Free-Roll Guarantee: {fr.get('guarantee')}")
+        
+    sl = res.get('session_levels')
+    if sl:
+        print("\n[🏛️ SESSION LIQUIDITY LEVELS (ASIAN RANGE & JUDAS SWEEPS)]")
+        print(f"  • Asian High: ${sl.get('asian_high')} | Asian Low: ${sl.get('asian_low')} | Mid: ${sl.get('asian_mid')}")
+        print(f"  • Sweep Status: {sl.get('sweep_status')}")
+        print(f"  • Market Context: {sl.get('sweep_note')}")
+        
+    print(f"\n  • Rules        : {ex['trade_management']}")
     
     print("\n[📊 KEY TECHNICALS & MACRO CONFLUENCE]")
     ind = res['indicators']

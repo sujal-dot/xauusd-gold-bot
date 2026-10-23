@@ -135,10 +135,25 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
         f"• *Target 2 (TP2)*: `{ex['take_profit_2']}`",
         f"• *Target 3 (TP3)*: `{ex['take_profit_3']}`",
         f"• *Rule*: _{ex['trade_management']}_",
-        "───────────────",
+        "───────────────"
+    ]
+    
+    fr = ex.get("free_roll_protocol")
+    if fr:
+        lines.extend([
+            "",
+            "🛡️ *ZERO-DOWNSIDE FREE-ROLL PROTOCOL*",
+            f"1️⃣ {fr.get('step_1')}",
+            f"2️⃣ {fr.get('step_2')}",
+            f"3️⃣ {fr.get('step_3')}",
+            f"★ _{fr.get('guarantee')}_",
+            "───────────────"
+        ])
+        
+    lines.extend([
         "",
         "📊 *KEY CONFLUENCE*"
-    ]
+    ])
     
     if "atr_14_5m" in ind:
         lines.extend([

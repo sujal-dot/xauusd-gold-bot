@@ -316,6 +316,12 @@ def analyze_currency_pair(pair_key: str, timeframe: str = "scalp"):
             "take_profit_1": f"{tp1:.{decimals}f} (1:1.5 R:R | +{round(risk_pips*1.5, 1)} pips ITM Target 1)",
             "take_profit_2": f"{tp2:.{decimals}f} (1:2.5 R:R | +{round(risk_pips*2.5, 1)} pips ITM Target 2 - Key Liquidity Sweep)",
             "take_profit_3": f"{tp3:.{decimals}f} (1:3.5 R:R | +{round(risk_pips*3.5, 1)} pips ITM Target 3 - Lipschutz Asymmetric Target)",
+            "free_roll_protocol": {
+                "step_1": f"Enter immediately at CMP ({current_price:.{decimals}f}) with Stop Loss at {stop_loss:.{decimals}f} ({risk_pips} pips risk).",
+                "step_2": f"When TP1 ({tp1:.{decimals}f}) is hit (+{round(risk_pips*1.5, 1)} pips), close 50% partial profit.",
+                "step_3": f"IMMEDIATELY drag Stop Loss to exact entry CMP ({current_price:.{decimals}f}).",
+                "guarantee": "0% DOWNSIDE RISK. Downside is mathematically eliminated. Trade becomes a free roll (Win or $0.00 Breakeven)."
+            },
             "rules": "Enter immediately at CMP. Close 50% at TP1 and move Stop Loss to Breakeven (CMP) immediately. Trail runner."
         },
         "technicals": {
