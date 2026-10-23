@@ -37,6 +37,10 @@ jobs:
         run: |
           python3 gold_signal.py --timeframe "${{ github.event.inputs.timeframe || 'scalp' }}"
 
+      - name: Scan Best Currency Setups & Intermarket Confluence
+        run: |
+          python3 currency_scanner.py
+
       - name: Broadcast to Telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
