@@ -267,8 +267,8 @@ def run_check(force: bool = False, timeframe: str = "smc") -> bool:
     
     print(f"[*] Engine result: {signal} ({confidence}% confidence)")
     
-    # Verify strict filter criteria
-    if confidence < config.get("min_confidence", 70) or "NEUTRAL" in signal or "PATIENCE" in signal:
+    # Verify strict filter criteria (bypassed if --force is explicitly requested)
+    if not force and (confidence < config.get("min_confidence", 70) or "NEUTRAL" in signal or "PATIENCE" in signal):
         print(f"[-] No high-probability setup met (Confidence {confidence}% < {config.get('min_confidence', 70)}% or Neutral/Patience).")
         return False
         
