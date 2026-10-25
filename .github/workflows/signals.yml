@@ -1,4 +1,4 @@
-name: XAUUSD Forex Gold Scalper & Signal Broadcaster
+name: XAUUSD Forex Gold Institutional SMC Signal Broadcaster
 
 on:
   schedule:
@@ -11,12 +11,13 @@ on:
       timeframe:
         description: 'Trading Style / Timeframe'
         required: true
-        default: 'scalp'
+        default: 'smc'
         type: choice
         options:
-          - scalp
+          - smc
           - intraday
           - swing
+          - scalp
       force:
         description: 'Force send alert (bypasses session check and price cooldown)'
         required: false
@@ -46,11 +47,11 @@ jobs:
           restore-keys: |
             signal-state-
 
-      - name: Fast 5-Minute Spot Gold Scalp Check & Telegram Broadcast
+      - name: Fast 5-Minute Spot Gold SMC Check & Telegram Broadcast
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TIMEFRAME: ${{ github.event.inputs.timeframe || 'scalp' }}
+          TIMEFRAME: ${{ github.event.inputs.timeframe || 'smc' }}
           FORCE_ARG: ${{ github.event.inputs.force == 'true' && '--force' || '' }}
         run: |
           python3 telegram_gold_signal.py --timeframe "$TIMEFRAME" $FORCE_ARG

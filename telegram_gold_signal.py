@@ -153,7 +153,7 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
     ex = res["execution"]
     ind = res["indicators"]
     p = res.get("pivots_daily", {})
-    tf = res.get("timeframe", "Scalp (5M / 15M)")
+    tf = res.get("timeframe", "SMC (15M Execution / 1H Structure)")
     src = res.get("price_source", "Spot XAU/USD Live")
     
     lines = [
@@ -161,19 +161,30 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
         f"⏱ *Mode*: `{tf}` | *Session*: {session_name}",
         f"🕒 *Time*: `{res['timestamp']}`",
         f"💵 *Live Spot CMP*: `${res['current_price']:.2f}` ({src})",
-        f"🎯 *Confidence*: `{res['confidence_percent']}%` | *Bias*: `{res['bias']}`",
+        f"🎯 *Confidence*: `{res['confidence_percent']}%` | *Bias*: `{res['bias']}`"
+    ]
+    
+    if res.get("entry_reason"):
+        lines.append(f"🏛 *SMC Setup*: `{res['entry_reason']}`")
+        
+    dr = res.get("dealing_range")
+    if dr:
+        regime = "PREMIUM (Sell Zone)" if "SELL" in sig else ("DISCOUNT (Buy Zone)" if "BUY" in sig else "EQUILIBRIUM")
+        lines.append(f"⚖️ *Dealing Range*: `${dr['range_low']} – ${dr['range_high']}` (50% Eq: `${dr['equilibrium_50']}` | `{regime}`)")
+        
+    lines.extend([
         "",
         "───────────────",
         "📋 *EXECUTION PLAN*",
         f"• *Action*: `{res['bias']}`",
         f"• *Entry Zone (CMP)*: `{ex['entry_range']}`",
-        f"• *Stop Loss*: `{ex['stop_loss']}` (Risk: `{ex['risk_per_ounce']}/oz`)",
+        f"• *Stop Loss*: `{ex['stop_loss']}` (Risk: `{ex['risk_per_ounce']}/oz` - Structural)",
         f"• *Target 1 (TP1)*: `{ex['take_profit_1']}`",
         f"• *Target 2 (TP2)*: `{ex['take_profit_2']}`",
         f"• *Target 3 (TP3)*: `{ex['take_profit_3']}`",
         f"• *Rule*: _{ex['trade_management']}_",
         "───────────────"
-    ]
+    ])
     
     fr = ex.get("free_roll_protocol")
     if fr:
@@ -206,16 +217,20 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
         "📊 *KEY CONFLUENCE*"
     ])
     
-    if "atr_14_5m" in ind:
+    if "atr_14_15m" in ind:
+        lines.extend([
+            f"• 15M RSI: `{ind.get('rsi_14_15m')}` | 15M ATR: `${ind.get('atr_14_15m')}`",
+            f"• 15M EMAs: 20: `${ind.get('ema_20_15m')}` | 50: `${ind.get('ema_50_15m')}`",
+            f"• 1H Macro Trend: `{ind.get('h1_trend')}` (50 EMA `${ind.get('h1_ema_50')}` | 200 EMA `${ind.get('h1_ema_200')}`)",
+            f"• US Dollar Index (DXY): `{ind.get('dxy_trend')}` ({ind.get('dxy_price')})"
+        ])
+    elif "atr_14_5m" in ind:
         lines.extend([
             f"• 5M RSI: `{ind.get('rsi_14_5m')}` | 15M RSI: `{ind.get('rsi_14_15m')}` | 5M ATR: `${ind.get('atr_14_5m')}`",
             f"• 5M EMAs: 9: `${ind.get('ema_9_5m')}` | 21: `${ind.get('ema_21_5m')}` | 50: `${ind.get('ema_50_5m')}`",
             f"• 15M Trend: 20 EMA `${ind.get('ema_20_15m')}` | 50 EMA `${ind.get('ema_50_15m')}`",
             f"• US Dollar Index (DXY): `{ind.get('dxy_trend')}` ({ind.get('dxy_price')})"
         ])
-        if res.get("fvgs_detected"):
-            fvg = res["fvgs_detected"][0]
-            lines.append(f"• 5M FVG: `{fvg['type']}` `${fvg['bottom']} – ${fvg['top']}`")
     else:
         lines.extend([
             f"• 1H RSI: `{ind.get('rsi_14_1h')}` | Daily RSI: `{ind.get('rsi_14_daily')}`",
@@ -230,7 +245,7 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
     ])
     return "\n".join(lines)
 
-def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
+def run_check(force: bool = False, timeframe: str = "smc") -> bool:
     """Executes a single check and sends alert if criteria are met."""
     config = load_config()
     bot_token = config.get("bot_token")
@@ -253,8 +268,8 @@ def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
     print(f"[*] Engine result: {signal} ({confidence}% confidence)")
     
     # Verify strict filter criteria
-    if confidence < config.get("min_confidence", 70) or "NEUTRAL" in signal:
-        print(f"[-] No high-probability setup met (Confidence {confidence}% < {config.get('min_confidence', 70)}% or Neutral).")
+    if confidence < config.get("min_confidence", 70) or "NEUTRAL" in signal or "PATIENCE" in signal:
+        print(f"[-] No high-probability setup met (Confidence {confidence}% < {config.get('min_confidence', 70)}% or Neutral/Patience).")
         return False
         
     # Check state file to prevent duplicate alerts
@@ -264,8 +279,8 @@ def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
     last_price = last_state.get("price", 0)
     curr_price = res["current_price"]
     
-    # In scalping, a $1.20+ move is a fresh 5M entry setup; in swing, $6.0+
-    min_price_move = 1.20 if timeframe == "scalp" else 6.0
+    # In SMC/Scalping, a $1.50+ move is a fresh entry zone; in swing, $6.0+
+    min_price_move = 1.50 if timeframe in ("smc", "scalp", "intraday") else 6.0
     last_time_str = last_state.get("timestamp", "")
     time_elapsed_min = 999.0
     if last_time_str:
@@ -278,7 +293,7 @@ def run_check(force: bool = False, timeframe: str = "scalp") -> bool:
     # Send if:
     # 1. Force is enabled
     # 2. Signal direction changed (e.g. BUY -> SELL)
-    # 3. Price moved by $1.20+ (fresh entry zone)
+    # 3. Price moved by $1.50+ (fresh entry zone)
     # 4. At least 15 minutes elapsed since last alert and setup remains active
     if not force and last_sig == signal and abs(curr_price - last_price) < min_price_move and time_elapsed_min < 15.0:
         print(f"[-] Active {signal} setup at ${curr_price:.2f} (price moved ${abs(curr_price - last_price):.2f} < ${min_price_move}, last alert {time_elapsed_min:.1f}m ago). Skipping duplicate.")
@@ -300,7 +315,7 @@ def main():
     parser.add_argument("--chat-id", type=str, help="Telegram Chat ID")
     parser.add_argument("--test", action="store_true", help="Send a test message to Telegram")
     parser.add_argument("--force", action="store_true", help="Run analysis regardless of session hours")
-    parser.add_argument("--timeframe", choices=["scalp", "intraday", "swing"], default="scalp", help="Signal timeframe mode (default: scalp)")
+    parser.add_argument("--timeframe", choices=["smc", "scalp", "intraday", "swing"], default="smc", help="Signal timeframe mode (default: smc - Institutional Order Block & FVG)")
     parser.add_argument("--interval", type=int, default=300, help="Daemon check interval in seconds (default: 300 = 5 minutes)")
     parser.add_argument("--daemon", action="store_true", help="Run continuous loop (checks every 5 minutes during trading sessions)")
     args = parser.parse_args()

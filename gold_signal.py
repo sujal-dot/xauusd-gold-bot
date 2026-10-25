@@ -317,6 +317,391 @@ def calculate_live_position_sizes(risk_per_ounce: float, risk_pct: float = 1.0):
         }
     return table
 
+def detect_order_blocks(candles, atr_val, lookback=24):
+    """
+    Identifies institutional Order Blocks (OB) with displacement criteria.
+    - Bullish OB: The last down candle before a strong upward displacement that broke previous swing high/FVG.
+    - Bearish OB: The last up candle before a strong downward displacement that broke previous swing low/FVG.
+    """
+    bullish_obs = []
+    bearish_obs = []
+    start_idx = max(2, len(candles) - lookback)
+    
+    for i in range(start_idx, len(candles)):
+        c = candles[i]
+        prev = candles[i - 1]
+        body = abs(c["close"] - c["open"])
+        
+        # Bullish displacement
+        if c["close"] > c["open"] and prev["close"] < prev["open"] and body > atr_val * 1.15:
+            bullish_obs.append({
+                "type": "BULLISH_OB",
+                "top": round(prev["high"], 2),
+                "bottom": round(prev["low"], 2),
+                "mid": round((prev["high"] + prev["low"]) / 2.0, 2),
+                "invalidation_sl": round(min(prev["low"], c["low"]), 2),
+                "candle_idx": i - 1,
+                "timestamp": prev["timestamp"]
+            })
+            
+        # Bearish displacement
+        elif c["close"] < c["open"] and prev["close"] > prev["open"] and body > atr_val * 1.15:
+            bearish_obs.append({
+                "type": "BEARISH_OB",
+                "top": round(prev["high"], 2),
+                "bottom": round(prev["low"], 2),
+                "mid": round((prev["high"] + prev["low"]) / 2.0, 2),
+                "invalidation_sl": round(max(prev["high"], c["high"]), 2),
+                "candle_idx": i - 1,
+                "timestamp": prev["timestamp"]
+            })
+            
+    return bullish_obs, bearish_obs
+
+def detect_fair_value_gaps(candles, lookback=24):
+    """
+    Detects unmitigated Fair Value Gaps (FVG) / Imbalances (BISI and SIBI).
+    - Bullish FVG: Candle i-2 High < Candle i Low (Buy-side imbalance).
+    - Bearish FVG: Candle i-2 Low > Candle i High (Sell-side imbalance).
+    """
+    bullish_fvgs = []
+    bearish_fvgs = []
+    start_idx = max(2, len(candles) - lookback)
+    
+    for i in range(start_idx, len(candles)):
+        c0 = candles[i - 2]
+        c2 = candles[i]
+        
+        # Bullish FVG
+        if c2["low"] > c0["high"]:
+            gap = round(c2["low"] - c0["high"], 2)
+            if gap >= 0.35:
+                bullish_fvgs.append({
+                    "type": "BULLISH_FVG",
+                    "top": round(c2["low"], 2),
+                    "bottom": round(c0["high"], 2),
+                    "ce_mid": round((c2["low"] + c0["high"]) / 2.0, 2),
+                    "size": gap,
+                    "candle_idx": i
+                })
+        # Bearish FVG
+        elif c0["low"] > c2["high"]:
+            gap = round(c0["low"] - c2["high"], 2)
+            if gap >= 0.35:
+                bearish_fvgs.append({
+                    "type": "BEARISH_FVG",
+                    "top": round(c0["low"], 2),
+                    "bottom": round(c2["high"], 2),
+                    "ce_mid": round((c0["low"] + c2["high"]) / 2.0, 2),
+                    "size": gap,
+                    "candle_idx": i
+                })
+    return bullish_fvgs, bearish_fvgs
+
+def calculate_dealing_range(candles, lookback=36):
+    """
+    Calculates Dealing Range, 50% Equilibrium, Premium Zone, and Discount Zone.
+    Institutions ONLY Buy in Discount (< 50%) and ONLY Sell in Premium (> 50%).
+    """
+    sub = candles[-lookback:] if len(candles) >= lookback else candles
+    high = max(c["high"] for c in sub)
+    low = min(c["low"] for c in sub)
+    range_span = high - low
+    eq = round((high + low) / 2.0, 2)
+    
+    # Golden Pocket Fibonacci OTE (61.8% - 78.6%)
+    fib_618 = round(low + (range_span * 0.618), 2)
+    fib_786 = round(low + (range_span * 0.786), 2)
+    fib_382 = round(low + (range_span * 0.382), 2)
+    fib_236 = round(low + (range_span * 0.236), 2)
+    
+    return {
+        "range_high": round(high, 2),
+        "range_low": round(low, 2),
+        "range_size": round(range_span, 2),
+        "equilibrium_50": eq,
+        "premium_zone": f"${eq:.2f} – ${high:.2f} (SELL ZONE ONLY)",
+        "discount_zone": f"${low:.2f} – ${eq:.2f} (BUY ZONE ONLY)",
+        "golden_pocket_short": f"${fib_618:.2f} – ${fib_786:.2f}",
+        "golden_pocket_long": f"${fib_236:.2f} – ${fib_382:.2f}"
+    }
+
+def detect_fractal_swings(candles, lookback=36):
+    """Detects 5-bar fractal swing highs and lows to track market structure shifts."""
+    swings_h = []
+    swings_l = []
+    start_idx = max(2, len(candles) - lookback)
+    for i in range(start_idx, len(candles) - 2):
+        h = candles[i]["high"]
+        l = candles[i]["low"]
+        if h > candles[i-1]["high"] and h > candles[i-2]["high"] and h > candles[i+1]["high"] and h > candles[i+2]["high"]:
+            swings_h.append({"price": round(h, 2), "idx": i})
+        if l < candles[i-1]["low"] and l < candles[i-2]["low"] and l < candles[i+1]["low"] and l < candles[i+2]["low"]:
+            swings_l.append({"price": round(l, 2), "idx": i})
+    return swings_h, swings_l
+
+def analyze_gold_smc():
+    """
+    Premier Institutional Smart Money Concepts (SMC) & Top Trader Engine for Gold (XAU/USD).
+    Focuses on:
+      1. 1H Macro Market Structure & Trend Alignment (50/200 EMA)
+      2. 15M Institutional Order Block (OB) Mitigations
+      3. 15M Fair Value Gap (FVG) / Imbalance Retests
+      4. Asian Session High (BSL) & Low (SSL) Liquidity Sweeps (Judas Swings)
+      5. Dealing Range Equilibrium (Only Sell in Premium, Only Buy in Discount)
+      6. Structural Invalidation Stop Loss (Behind OB / Swing levels - NO premature stop-outs)
+      7. Asymmetric Zero-Downside Free-Roll Target Scaling (1:1.5, 1:2.5, 1:3.5+)
+    """
+    gold_15m = fetch_gold_candles(interval="15m", range_val="5d")
+    gold_1h = fetch_gold_candles(interval="1h", range_val="1mo")
+    gold_daily = fetch_gold_candles(interval="1d", range_val="6mo")
+    dxy_1h = fetch_candles("DX-Y.NYB", interval="1h", range_val="5d")
+    
+    if not gold_15m or not gold_1h:
+        return {"error": "Unable to fetch 15M/1H Gold market data. Verify internet connection."}
+        
+    live_price, price_source = get_live_gold_spot()
+    if live_price is not None:
+        current_price = live_price
+    else:
+        current_price = gold_15m[-1]["close"]
+        price_source = "15M Candle Close"
+
+    # Synchronize latest candle close to live real-time spot price
+    gold_15m[-1]["close"] = current_price
+    if current_price > gold_15m[-1]["high"]:
+        gold_15m[-1]["high"] = current_price
+    elif current_price < gold_15m[-1]["low"]:
+        gold_15m[-1]["low"] = current_price
+
+    prices_15m = [c["close"] for c in gold_15m]
+    prices_1h = [c["close"] for c in gold_1h]
+    
+    # 1. Higher Timeframe Trend Context (1H)
+    h1_ema50 = calculate_ema(prices_1h, 50)[-1]
+    h1_ema200 = calculate_ema(prices_1h, 200)[-1] if len(prices_1h) >= 200 else h1_ema50
+    h1_trend = "BULLISH" if prices_1h[-1] > h1_ema50 else "BEARISH"
+    
+    # 2. 15M Execution Indicators
+    atr_15m = calculate_atr(gold_15m, 14)
+    rsi_15m = calculate_rsi(prices_15m, 14)
+    ema20_15m = calculate_ema(prices_15m, 20)[-1]
+    ema50_15m = calculate_ema(prices_15m, 50)[-1]
+    
+    # 3. SMC Pillars
+    dealing_range = calculate_dealing_range(gold_15m, lookback=36)
+    eq = dealing_range["equilibrium_50"]
+    in_premium = current_price >= eq
+    in_discount = current_price <= eq
+    
+    bullish_obs, bearish_obs = detect_order_blocks(gold_15m, atr_15m, lookback=24)
+    bullish_fvgs, bearish_fvgs = detect_fair_value_gaps(gold_15m, lookback=24)
+    swings_h, swings_l = detect_fractal_swings(gold_15m, lookback=36)
+    session_info = calculate_session_levels(gold_15m)
+    a_high = session_info.get("asian_high")
+    a_low = session_info.get("asian_low")
+    
+    # 4. Check Active Retests and Sweeps
+    active_ob = None
+    active_fvg = None
+    setup_type = None
+    bias = "CONSOLIDATION"
+    signal_type = "PATIENCE (WAIT FOR OB/FVG MITIGATION)"
+    confidence = 55
+    stop_loss = None
+    entry_reason = f"Price trading near Equilibrium (${eq:.2f}). Awaiting institutional mitigation."
+    
+    bullish_factors = []
+    bearish_factors = []
+    
+    # Check Bearish OB / FVG / Sweep confluence
+    if in_premium or h1_trend == "BEARISH":
+        for ob in reversed(bearish_obs):
+            if ob["bottom"] - 1.50 <= current_price <= ob["top"] + 1.50:
+                active_ob = ob
+                setup_type = "BEARISH_OB_MITIGATION"
+                entry_reason = f"Bearish Order Block Mitigation (${ob['bottom']:.2f} – ${ob['top']:.2f})"
+                stop_loss = round(ob["invalidation_sl"] + max(atr_15m * 0.75, 3.20), 2)
+                bearish_factors.append(f"Institutional Supply: Mitigating 15M Bearish OB (${ob['bottom']} – ${ob['top']})")
+                break
+        if not active_ob:
+            for fvg in reversed(bearish_fvgs):
+                if fvg["bottom"] - 1.20 <= current_price <= fvg["top"] + 1.20:
+                    active_fvg = fvg
+                    setup_type = "BEARISH_FVG_RETEST"
+                    entry_reason = f"Bearish Fair Value Gap Retest (${fvg['bottom']:.2f} – ${fvg['top']:.2f})"
+                    stop_loss = round(fvg["top"] + max(atr_15m * 0.75, 3.20), 2)
+                    bearish_factors.append(f"Imbalance Retest: 15M Bearish FVG CE (${fvg['ce_mid']:.2f})")
+                    break
+        if session_info and "BEARISH" in session_info.get("sweep_status", ""):
+            bearish_factors.append(f"Liquidity Sweep: {session_info['sweep_note']}")
+            if not stop_loss and a_high:
+                stop_loss = round(a_high + max(atr_15m * 0.65, 3.0), 2)
+                setup_type = "ASIAN_HIGH_JUDAS_SWEEP"
+                entry_reason = f"Asian High (${a_high}) Buy-Side Liquidity (BSL) swept with rejection."
+
+    # Check Bullish OB / FVG / Sweep confluence
+    if in_discount or h1_trend == "BULLISH":
+        for ob in reversed(bullish_obs):
+            if ob["bottom"] - 1.50 <= current_price <= ob["top"] + 1.50:
+                active_ob = ob
+                setup_type = "BULLISH_OB_MITIGATION"
+                entry_reason = f"Bullish Order Block Mitigation (${ob['bottom']:.2f} – ${ob['top']:.2f})"
+                stop_loss = round(ob["invalidation_sl"] - max(atr_15m * 0.75, 3.20), 2)
+                bullish_factors.append(f"Institutional Demand: Mitigating 15M Bullish OB (${ob['bottom']} – ${ob['top']})")
+                break
+        if not active_ob:
+            for fvg in reversed(bullish_fvgs):
+                if fvg["bottom"] - 1.20 <= current_price <= fvg["top"] + 1.20:
+                    active_fvg = fvg
+                    setup_type = "BULLISH_FVG_RETEST"
+                    entry_reason = f"Bullish Fair Value Gap Retest (${fvg['bottom']:.2f} – ${fvg['top']:.2f})"
+                    stop_loss = round(fvg["bottom"] - max(atr_15m * 0.75, 3.20), 2)
+                    bullish_factors.append(f"Imbalance Retest: 15M Bullish FVG CE (${fvg['ce_mid']:.2f})")
+                    break
+        if session_info and "BULLISH" in session_info.get("sweep_status", ""):
+            bullish_factors.append(f"Liquidity Sweep: {session_info['sweep_note']}")
+            if not stop_loss and a_low:
+                stop_loss = round(a_low - max(atr_15m * 0.65, 3.0), 2)
+                setup_type = "ASIAN_LOW_JUDAS_SWEEP"
+                entry_reason = f"Asian Low (${a_low}) Sell-Side Liquidity (SSL) swept with rejection."
+
+    # DXY Intermarket
+    dxy_trend = "NEUTRAL"
+    dxy_price = None
+    if dxy_1h and len(dxy_1h) >= 20:
+        dxy_closes = [c["close"] for c in dxy_1h]
+        dxy_price = dxy_closes[-1]
+        dxy_ema20 = calculate_ema(dxy_closes, 20)[-1]
+        if dxy_price > dxy_ema20:
+            dxy_trend = "BULLISH (Headwind for Gold)"
+            bearish_factors.append(f"DXY 1H Bullish ({dxy_price:.2f}) - institutional headwind")
+        else:
+            dxy_trend = "BEARISH (Tailwind for Gold)"
+            bullish_factors.append(f"DXY 1H Bearish ({dxy_price:.2f}) - institutional tailwind")
+
+    if h1_trend == "BEARISH":
+        bearish_factors.append(f"1H Macro Structure Bearish (Price < 1H 50 EMA {h1_ema50:.2f})")
+    else:
+        bullish_factors.append(f"1H Macro Structure Bullish (Price > 1H 50 EMA {h1_ema50:.2f})")
+
+    # Trade Decision
+    ideal_entry = round(current_price, 2)
+    spread_buffer = 0.35
+    
+    is_sell = (len(bearish_factors) >= len(bullish_factors) + 2) and (setup_type and ("BEARISH" in setup_type or setup_type == "ASIAN_HIGH_JUDAS_SWEEP"))
+    is_buy = (len(bullish_factors) >= len(bearish_factors) + 2) and (setup_type and ("BULLISH" in setup_type or setup_type == "ASIAN_LOW_JUDAS_SWEEP"))
+    
+    if is_sell:
+        bias = "BEARISH"
+        signal_type = "INSTITUTIONAL SELL (SMC ORDER BLOCK / FVG)"
+        confidence = min(round((len(bearish_factors) / max(len(bearish_factors) + len(bullish_factors), 1)) * 100), 94)
+        if not stop_loss:
+            stop_loss = round(current_price + max(atr_15m * 1.25, 4.80), 2)
+        stop_loss = round(stop_loss + spread_buffer, 2)
+        risk = round(abs(stop_loss - ideal_entry), 2)
+        risk = max(min(risk, 9.50), 3.80)
+        stop_loss = round(ideal_entry + risk, 2)
+        
+        tp1 = round(ideal_entry - (risk * 1.5), 2)
+        tp2 = round(ideal_entry - (risk * 2.5), 2)
+        tp3 = round(ideal_entry - (risk * 3.5), 2)
+        
+    elif is_buy:
+        bias = "BULLISH"
+        signal_type = "INSTITUTIONAL BUY (SMC ORDER BLOCK / FVG)"
+        confidence = min(round((len(bullish_factors) / max(len(bearish_factors) + len(bullish_factors), 1)) * 100), 94)
+        if not stop_loss:
+            stop_loss = round(current_price - max(atr_15m * 1.25, 4.80), 2)
+        stop_loss = round(stop_loss - spread_buffer, 2)
+        risk = round(abs(ideal_entry - stop_loss), 2)
+        risk = max(min(risk, 9.50), 3.80)
+        stop_loss = round(ideal_entry - risk, 2)
+        
+        tp1 = round(ideal_entry + (risk * 1.5), 2)
+        tp2 = round(ideal_entry + (risk * 2.5), 2)
+        tp3 = round(ideal_entry + (risk * 3.5), 2)
+        
+    else:
+        signal_type = "PATIENCE (EQUILIBRIUM / AWAIT RETEST)"
+        bias = "CONSOLIDATION"
+        confidence = 52
+        risk = max(round(atr_15m * 1.25, 2), 4.80)
+        stop_loss = round(current_price - risk if h1_trend == 'BULLISH' else current_price + risk, 2)
+        tp1 = round(current_price + (risk * 1.5) if h1_trend == 'BULLISH' else current_price - (risk * 1.5), 2)
+        tp2 = round(current_price + (risk * 2.5) if h1_trend == 'BULLISH' else current_price - (risk * 2.5), 2)
+        tp3 = round(current_price + (risk * 3.5) if h1_trend == 'BULLISH' else current_price - (risk * 3.5), 2)
+        
+    pivots = calculate_pivot_points(gold_daily) if gold_daily else {}
+
+    return {
+        "asset": "XAU/USD (Spot Gold) - Institutional SMC Engine",
+        "timeframe": "15M Execution / 1H Structure",
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "current_price": round(current_price, 2),
+        "price_source": price_source,
+        "signal": signal_type,
+        "bias": bias,
+        "confidence_percent": confidence,
+        "setup_type": setup_type or "EQUILIBRIUM_WAIT",
+        "entry_reason": entry_reason,
+        "execution": {
+            "execution_type": "MARKET ORDER AT CMP (SMC STRUCTURAL STOP)",
+            "cmp": f"${current_price:.2f}",
+            "entry_range": f"CMP ${current_price:.2f} (Institutional Zone: ${current_price-0.75:.2f} – ${current_price+0.75:.2f})",
+            "ideal_entry": f"${current_price:.2f} (CMP)",
+            "stop_loss": f"${stop_loss:.2f}",
+            "risk_per_ounce": f"${risk:.2f}",
+            "take_profit_1": f"${tp1:.2f} (1:1.5 R:R | Free-Roll: Lock 50% & SL to Breakeven)",
+            "take_profit_2": f"${tp2:.2f} (1:2.5 R:R | Opposing Liquidity Pool)",
+            "take_profit_3": f"${tp3:.2f} (1:3.5+ R:R | Institutional Session Runner)",
+            "free_roll_protocol": {
+                "step_1": f"Enter at CMP (${current_price:.2f}) with structural stop at ${stop_loss:.2f} (Risk: ${risk:.2f}/oz).",
+                "step_2": f"When TP1 (${tp1:.2f}) is hit, close 50% partial profit (+${risk*1.5:.2f}/oz profit locked).",
+                "step_3": f"IMMEDIATELY drag Stop Loss to exact entry CMP (${current_price:.2f}).",
+                "guarantee": "0% DOWNSIDE RISK. Downside is mathematically eliminated. Trade becomes a free roll (Win or $0.00 Breakeven)."
+            },
+            "live_account_toolkit": {
+                "broker_spread_guard": f"+${spread_buffer:.2f}/oz broker spread guard included in Stop Loss",
+                "position_sizing_table": calculate_live_position_sizes(risk, risk_pct=1.0),
+                "pre_flight_live_checklist": [
+                    "1. SPREAD: Check broker spread is < $0.35 (optimal in London/NY session).",
+                    "2. LOT SIZE: Select recommended lots based on your live account balance.",
+                    "3. SMC RETEST: Confirm entry is within Order Block / FVG mitigation zone.",
+                    "4. FREE-ROLL RULE: Set alarm at TP1. When filled, slide SL to CMP entry for a 0% risk trade.",
+                    "5. RED FOLDER RULE: Verify no High-Impact US news event (CPI/FOMC/NFP) is within 20 mins."
+                ]
+            },
+            "trade_management": "Enter at CMP in the Order Block/FVG zone. Lock 50% profit at TP1 and slide SL to Breakeven for a 0% downside free roll."
+        },
+        "dealing_range": dealing_range,
+        "order_blocks": {
+            "bullish_obs": bullish_obs[-2:],
+            "bearish_obs": bearish_obs[-2:]
+        },
+        "fair_value_gaps": {
+            "bullish_fvgs": bullish_fvgs[-2:],
+            "bearish_fvgs": bearish_fvgs[-2:]
+        },
+        "session_levels": session_info,
+        "indicators": {
+            "atr_14_15m": round(atr_15m, 2),
+            "rsi_14_15m": round(rsi_15m, 1),
+            "ema_20_15m": round(ema20_15m, 2),
+            "ema_50_15m": round(ema50_15m, 2),
+            "h1_ema_50": round(h1_ema50, 2),
+            "h1_ema_200": round(h1_ema200, 2),
+            "h1_trend": h1_trend,
+            "dxy_trend": dxy_trend,
+            "dxy_price": round(dxy_price, 2) if dxy_price else "N/A"
+        },
+        "pivots_daily": pivots.get("classic", {}),
+        "confluence_reasons": {
+            "bullish": bullish_factors,
+            "bearish": bearish_factors
+        }
+    }
+
 def analyze_gold_scalp():
     """
     Dedicated high-frequency scalping engine for Gold (XAU/USD).
@@ -549,12 +934,15 @@ def analyze_gold_scalp():
         }
     }
 
-def analyze_gold(timeframe_mode="scalp"):
+def analyze_gold(timeframe_mode="smc"):
     """
     Main signal generation function.
-    Supports 'scalp', 'intraday', and 'swing' modes.
+    Default mode: 'smc' (Institutional Smart Money Concepts: Order Blocks + FVGs).
+    Also supports 'scalp', 'intraday', and 'swing' modes.
     """
-    if timeframe_mode == "scalp":
+    if timeframe_mode in ("smc", "intraday"):
+        return analyze_gold_smc()
+    elif timeframe_mode == "scalp":
         return analyze_gold_scalp()
         
     # 1. Fetch data
@@ -774,6 +1162,8 @@ def print_terminal_report(res):
     sig = res['signal']
     color_prefix = "🟢" if "BUY" in sig else ("🔴" if "SELL" in sig else "🟡")
     print(f"\n{color_prefix} SIGNAL: {res['signal']}  |  BIAS: {res['bias']}  |  CONFIDENCE: {res['confidence_percent']}%")
+    if res.get('entry_reason'):
+        print(f"  • Setup Rationale: {res['entry_reason']}")
     print("-" * 65)
     
     ex = res['execution']
@@ -782,6 +1172,30 @@ def print_terminal_report(res):
     print(f"  • Target 1     : {ex['take_profit_1']}")
     print(f"  • Target 2     : {ex['take_profit_2']}")
     print(f"  • Target 3     : {ex['take_profit_3']}")
+    
+    dr = res.get('dealing_range')
+    if dr:
+        print(f"\n[📊 DEALING RANGE & PREMIUM/DISCOUNT EQUILIBRIUM]")
+        print(f"  • Range: ${dr['range_low']} – ${dr['range_high']} (Size: ${dr['range_size']}/oz)")
+        print(f"  • 50% Equilibrium: ${dr['equilibrium_50']} | {dr['premium_zone']}")
+        print(f"  • Discount Zone  : {dr['discount_zone']}")
+        print(f"  • Golden Pocket  : Short {dr['golden_pocket_short']} | Long {dr['golden_pocket_long']}")
+        
+    obs = res.get('order_blocks', {})
+    if obs and (obs.get('bullish_obs') or obs.get('bearish_obs')):
+        print(f"\n[🏛️ INSTITUTIONAL ORDER BLOCKS (OB)]")
+        for ob in obs.get('bearish_obs', []):
+            print(f"  • BEARISH OB: ${ob['bottom']} – ${ob['top']} (CE: ${ob['mid']}) | Invalidation SL: ${ob['invalidation_sl']}")
+        for ob in obs.get('bullish_obs', []):
+            print(f"  • BULLISH OB: ${ob['bottom']} – ${ob['top']} (CE: ${ob['mid']}) | Invalidation SL: ${ob['invalidation_sl']}")
+            
+    fvgs = res.get('fair_value_gaps', {})
+    if fvgs and (fvgs.get('bullish_fvgs') or fvgs.get('bearish_fvgs')):
+        print(f"\n[⚡ FAIR VALUE GAPS (FVG / IMBALANCES)]")
+        for f in fvgs.get('bearish_fvgs', []):
+            print(f"  • BEARISH FVG: ${f['bottom']} – ${f['top']} (CE: ${f['ce_mid']})")
+        for f in fvgs.get('bullish_fvgs', []):
+            print(f"  • BULLISH FVG: ${f['bottom']} – ${f['top']} (CE: ${f['ce_mid']})")
     
     fr = ex.get('free_roll_protocol')
     if fr:
@@ -816,7 +1230,13 @@ def print_terminal_report(res):
     
     print("\n[📊 KEY TECHNICALS & MACRO CONFLUENCE]")
     ind = res['indicators']
-    if 'atr_14_5m' in ind:
+    if 'atr_14_15m' in ind:
+        print(f"  • Execution Mode : Institutional SMC (15M Execution / 1H Structure)")
+        print(f"  • 15M RSI: {ind.get('rsi_14_15m')} | 15M ATR (Volatility): ${ind.get('atr_14_15m')}")
+        print(f"  • 15M EMAs: 20 EMA: ${ind.get('ema_20_15m')} | 50 EMA: ${ind.get('ema_50_15m')}")
+        print(f"  • 1H Macro Trend: {ind.get('h1_trend')} (50 EMA: ${ind.get('h1_ema_50')} | 200 EMA: ${ind.get('h1_ema_200')})")
+        print(f"  • US Dollar Index (DXY): {ind.get('dxy_trend')} ({ind.get('dxy_price')})")
+    elif 'atr_14_5m' in ind:
         print(f"  • Execution Mode : Scalp (5M Execution / 15M Trend Structure)")
         print(f"  • 5M RSI: {ind.get('rsi_14_5m')} | 15M RSI: {ind.get('rsi_14_15m')} | 5M ATR: ${ind.get('atr_14_5m')}")
         print(f"  • 5M Fast EMAs: 9 EMA: ${ind.get('ema_9_5m')} | 21 EMA: ${ind.get('ema_21_5m')} | 50 EMA: ${ind.get('ema_50_5m')}")
@@ -852,9 +1272,9 @@ def print_terminal_report(res):
     print("=" * 65 + "\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="Forex Gold (XAU/USD) Signal Generator")
+    parser = argparse.ArgumentParser(description="Forex Gold (XAU/USD) Institutional SMC Signal Engine")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
-    parser.add_argument("--timeframe", choices=["scalp", "intraday", "swing"], default="scalp", help="Trading style (default: scalp)")
+    parser.add_argument("--timeframe", choices=["smc", "scalp", "intraday", "swing"], default="smc", help="Trading style (default: smc - Institutional Order Block & FVG)")
     args = parser.parse_args()
     
     result = analyze_gold(timeframe_mode=args.timeframe)
