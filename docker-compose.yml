@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  xauusd-gold-bot:
+    build: .
+    restart: unless-stopped
+    container_name: xauusd-gold-bot
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - TZ=Asia/Kolkata
