@@ -145,6 +145,32 @@ def is_active_session():
     else:
         return False, "Daily Market Rollover (21:00-22:00 UTC spread spike)"
 
+def is_india_market_window():
+    """
+    Returns True if current time is within India market monitoring hours:
+    10:00 AM IST to 10:00 PM IST (UTC+5:30), Monday through Friday.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    except Exception:
+        from datetime import timedelta
+        now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
+    weekday = now_ist.weekday()  # 0=Monday, 4=Friday, 5=Saturday, 6=Sunday
+    hour_val = now_ist.hour + now_ist.minute / 60.0
+    time_str = now_ist.strftime("%H:%M:%S IST")
+
+    if weekday == 5:
+        return False, f"Market Closed (Saturday) @ {time_str}"
+    if weekday == 6:
+        return False, f"Market Closed (Sunday) @ {time_str}"
+
+    if 10.0 <= hour_val <= 22.0:
+        return True, f"India Market Window ({time_str} is within 10:00 AM - 10:00 PM IST)"
+    
+    return False, f"Outside India Market Window ({time_str} is outside 10:00 AM - 10:00 PM IST)"
+
 def format_telegram_alert(res: dict, session_name: str) -> str:
     """Formats the signal analysis into a professional, mobile-friendly Telegram alert."""
     sig = res["signal"]
@@ -245,7 +271,7 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
     ])
     return "\n".join(lines)
 
-def run_check(force: bool = False, timeframe: str = "smc") -> bool:
+def run_check(force: bool = False, timeframe: str = "smc", check_india_window: bool = True) -> bool:
     """Executes a single check and sends alert if criteria are met."""
     config = load_config()
     bot_token = config.get("bot_token")
@@ -254,7 +280,13 @@ def run_check(force: bool = False, timeframe: str = "smc") -> bool:
     if not bot_token or not chat_id:
         print("[!] Telegram credentials not configured. Run with --setup first.")
         return False
-        
+
+    if check_india_window and not force:
+        is_india_open, india_status = is_india_market_window()
+        if not is_india_open:
+            print(f"[-] {india_status}. Skipping check.")
+            return False
+
     is_active, session_name = is_active_session()
     if config.get("check_sessions_only", True) and not is_active and not force:
         print(f"[-] Current time is outside prime sessions: {session_name}. Skipping check.")
@@ -318,6 +350,7 @@ def main():
     parser.add_argument("--timeframe", choices=["smc", "scalp", "intraday", "swing"], default="smc", help="Signal timeframe mode (default: smc - Institutional Order Block & FVG)")
     parser.add_argument("--interval", type=int, default=300, help="Daemon check interval in seconds (default: 300 = 5 minutes)")
     parser.add_argument("--daemon", action="store_true", help="Run continuous loop (checks every 5 minutes during trading sessions)")
+    parser.add_argument("--no-india-window", action="store_true", help="Disable India market window enforcement (10:00 AM - 10:00 PM IST)")
     args = parser.parse_args()
     
     if args.setup or (args.token and args.chat_id):
@@ -344,12 +377,12 @@ def main():
         print(f"[*] Starting Telegram Gold Signal daemon (checking every {interval_min:.1f} min / {interval_sec}s)...")
         while True:
             try:
-                run_check(force=args.force, timeframe=args.timeframe)
+                run_check(force=args.force, timeframe=args.timeframe, check_india_window=not args.no_india_window)
             except Exception as e:
                 print(f"[!] Daemon error: {e}")
             time.sleep(interval_sec)
     else:
-        run_check(force=args.force, timeframe=args.timeframe)
+        run_check(force=args.force, timeframe=args.timeframe, check_india_window=not args.no_india_window)
 
 if __name__ == "__main__":
     main()

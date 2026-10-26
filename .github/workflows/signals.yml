@@ -2,10 +2,10 @@ name: XAUUSD Forex Gold Institutional SMC Signal Broadcaster
 
 on:
   schedule:
-    # Runs every 5 minutes across Asian, London, and NY trading sessions Mon-Fri
-    - cron: '*/5 0-21 * * 1-5'
-    # Runs every 5 minutes during Sunday evening Asian market open (22:00-23:55 UTC)
-    - cron: '*/5 22-23 * * 0'
+    # Runs every 5 minutes from 10:00 AM to 10:00 PM IST (04:30 to 16:30 UTC), Monday to Friday
+    - cron: '30-55/5 4 * * 1-5'   # 04:30 - 04:55 UTC (10:00 AM - 10:25 AM IST)
+    - cron: '*/5 5-15 * * 1-5'    # 05:00 - 15:55 UTC (10:30 AM - 09:25 PM IST)
+    - cron: '0-30/5 16 * * 1-5'   # 16:00 - 16:30 UTC (09:30 PM - 10:00 PM IST)
   workflow_dispatch:
     inputs:
       timeframe:
