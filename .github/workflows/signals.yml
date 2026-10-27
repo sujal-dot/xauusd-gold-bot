@@ -53,5 +53,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TIMEFRAME: ${{ github.event.inputs.timeframe || 'smc' }}
           FORCE_ARG: ${{ github.event.inputs.force == 'true' && '--force' || '' }}
+          NOTIFY_WAIT: 'true'
         run: |
           python3 telegram_gold_signal.py --timeframe "$TIMEFRAME" $FORCE_ARG

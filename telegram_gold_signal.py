@@ -52,7 +52,8 @@ def load_config():
         "bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
         "chat_id": os.environ.get("TELEGRAM_CHAT_ID", ""),
         "min_confidence": 70,
-        "check_sessions_only": True
+        "check_sessions_only": True,
+        "notify_wait": os.environ.get("NOTIFY_WAIT", "true").lower() in ("true", "1", "yes")
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -63,13 +64,14 @@ def load_config():
             print(f"[!] Warning reading config file: {e}")
     return config
 
-def save_config(bot_token: str, chat_id: str, min_confidence: int = 70):
+def save_config(bot_token: str, chat_id: str, min_confidence: int = 70, notify_wait: bool = True):
     """Saves Telegram configuration for persistent runs."""
     config = {
         "bot_token": bot_token.strip(),
         "chat_id": str(chat_id).strip(),
         "min_confidence": min_confidence,
-        "check_sessions_only": True
+        "check_sessions_only": True,
+        "notify_wait": notify_wait
     }
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
@@ -271,7 +273,7 @@ def format_telegram_alert(res: dict, session_name: str) -> str:
     ])
     return "\n".join(lines)
 
-def run_check(force: bool = False, timeframe: str = "smc", check_india_window: bool = True) -> bool:
+def run_check(force: bool = False, timeframe: str = "smc", check_india_window: bool = True, notify_wait: bool = None) -> bool:
     """Executes a single check and sends alert if criteria are met."""
     config = load_config()
     bot_token = config.get("bot_token")
@@ -299,12 +301,15 @@ def run_check(force: bool = False, timeframe: str = "smc", check_india_window: b
     
     print(f"[*] Engine result: {signal} ({confidence}% confidence)")
     
-    # Verify strict filter criteria (bypassed if --force is explicitly requested)
-    if not force and (confidence < config.get("min_confidence", 70) or "NEUTRAL" in signal or "PATIENCE" in signal):
+    if notify_wait is None:
+        notify_wait = config.get("notify_wait", True)
+
+    # In quiet mode (notify_wait=False), suppress Neutral and low-confidence Patience
+    if not force and not notify_wait and (confidence < config.get("min_confidence", 70) or "NEUTRAL" in signal or "PATIENCE" in signal):
         print(f"[-] No high-probability setup met (Confidence {confidence}% < {config.get('min_confidence', 70)}% or Neutral/Patience).")
         return False
         
-    # Check state file to prevent duplicate alerts
+    # Check state file to prevent duplicate alerts (when in quiet mode)
     last_state = load_state()
             
     last_sig = last_state.get("signal")
@@ -322,12 +327,8 @@ def run_check(force: bool = False, timeframe: str = "smc", check_india_window: b
         except Exception:
             pass
             
-    # Send if:
-    # 1. Force is enabled
-    # 2. Signal direction changed (e.g. BUY -> SELL)
-    # 3. Price moved by $1.50+ (fresh entry zone)
-    # 4. At least 15 minutes elapsed since last alert and setup remains active
-    if not force and last_sig == signal and abs(curr_price - last_price) < min_price_move and time_elapsed_min < 15.0:
+    # When quiet mode is active, suppress duplicate signals
+    if not force and not notify_wait and last_sig == signal and abs(curr_price - last_price) < min_price_move and time_elapsed_min < 15.0:
         print(f"[-] Active {signal} setup at ${curr_price:.2f} (price moved ${abs(curr_price - last_price):.2f} < ${min_price_move}, last alert {time_elapsed_min:.1f}m ago). Skipping duplicate.")
         return False
         
@@ -351,8 +352,16 @@ def main():
     parser.add_argument("--interval", type=int, default=300, help="Daemon check interval in seconds (default: 300 = 5 minutes)")
     parser.add_argument("--daemon", action="store_true", help="Run continuous loop (checks every 5 minutes during trading sessions)")
     parser.add_argument("--no-india-window", action="store_true", help="Disable India market window enforcement (10:00 AM - 10:00 PM IST)")
+    parser.add_argument("--notify-wait", action="store_true", default=None, help="Send Telegram status messages on every check even when waiting/neutral (default: True)")
+    parser.add_argument("--quiet-wait", action="store_true", help="Silence Telegram messages when in neutral/waiting mode (only send on BUY/SELL)")
     args = parser.parse_args()
     
+    notify_wait = True
+    if args.quiet_wait:
+        notify_wait = False
+    elif args.notify_wait is not None:
+        notify_wait = args.notify_wait
+
     if args.setup or (args.token and args.chat_id):
         token = args.token
         chat = args.chat_id
@@ -360,7 +369,7 @@ def main():
             token = input("Enter your Telegram Bot Token: ").strip()
         if not chat:
             chat = input("Enter your Telegram Chat ID: ").strip()
-        save_config(token, chat)
+        save_config(token, chat, notify_wait=notify_wait)
         
     if args.test:
         config = load_config()
@@ -374,15 +383,15 @@ def main():
     if args.daemon:
         interval_sec = max(args.interval, 30)
         interval_min = interval_sec / 60.0
-        print(f"[*] Starting Telegram Gold Signal daemon (checking every {interval_min:.1f} min / {interval_sec}s)...")
+        print(f"[*] Starting Telegram Gold Signal daemon (checking every {interval_min:.1f} min / {interval_sec}s, notify_wait={notify_wait})...")
         while True:
             try:
-                run_check(force=args.force, timeframe=args.timeframe, check_india_window=not args.no_india_window)
+                run_check(force=args.force, timeframe=args.timeframe, check_india_window=not args.no_india_window, notify_wait=notify_wait)
             except Exception as e:
                 print(f"[!] Daemon error: {e}")
             time.sleep(interval_sec)
     else:
-        run_check(force=args.force, timeframe=args.timeframe, check_india_window=not args.no_india_window)
+        run_check(force=args.force, timeframe=args.timeframe, check_india_window=not args.no_india_window, notify_wait=notify_wait)
 
 if __name__ == "__main__":
     main()
